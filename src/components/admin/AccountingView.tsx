@@ -317,8 +317,11 @@ export function AccountingView({
       'ملاحظات',
     ];
     const escapeCell = (val: string | number) => {
-      const s = String(val ?? '').replace(/"/g, '""');
-      return `"${s}"`;
+      let s = String(val ?? '');
+      if (typeof val === 'string' && /^[=+\-@\t\r]/.test(s)) {
+        s = `'${s}`;
+      }
+      return `"${s.replace(/"/g, '""')}"`;
     };
     const lines = [
       headers.map(escapeCell).join(','),

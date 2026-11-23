@@ -6,6 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { CustomerMenuView } from './components/CustomerMenuView';
 import { AdminAuthGate } from './components/AdminAuthGate';
 import { AdminDashboard } from './components/AdminDashboard';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 function FrescantoApp() {
   const [viewMode, setViewMode] = useState<'customer' | 'admin'>(() => {
@@ -103,6 +104,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <FrescantoApp />
+      <OfflineIndicator />
     </ErrorBoundary>
   );
 }

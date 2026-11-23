@@ -15,23 +15,11 @@ export class ErrorBoundary extends React.Component<
     this.state = { hasError: false, message: '' };
   }
 
-  static getDerivedStateFromError(error: Error): State {
-    let displayMsg = 'حدث خطأ غير متوقع أثناء تحميل البيانات.';
-    try {
-      const parsed = JSON.parse(error.message) as { error?: string; operationType?: string };
-      if (parsed?.error) {
-        if (parsed.error.toLowerCase().includes('permission')) {
-          displayMsg = 'لا توجد صلاحية كافية لتنفيذ هذه العملية. يرجى التأكد من تسجيل الدخول بحساب الإدارة المعتمد.';
-        } else {
-          displayMsg = `خطأ في قاعدة البيانات: ${parsed.error}`;
-        }
-      }
-    } catch {
-      if (error.message) {
-        displayMsg = error.message;
-      }
-    }
-    return { hasError: true, message: displayMsg };
+  static getDerivedStateFromError(): State {
+    return {
+      hasError: true,
+      message: 'حدث خطأ غير متوقع أثناء عرض الصفحة. اضغط «إعادة تحميل التطبيق» للمتابعة.',
+    };
   }
 
   componentDidCatch(error: Error) {

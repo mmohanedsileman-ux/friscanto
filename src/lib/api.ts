@@ -114,6 +114,7 @@ export interface AdminBootstrapResponse {
   monthlyClosings: MonthlyClosing[];
   storeSettings: StoreSettings;
   managedByEnv: boolean;
+  storageMode?: 'cloud_kv' | 'local_file' | 'tmp_ephemeral';
 }
 
 export function fetchAdminBootstrap(token: string): Promise<AdminBootstrapResponse> {

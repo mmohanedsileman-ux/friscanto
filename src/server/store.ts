@@ -17,6 +17,8 @@ export interface AdminCredentialRecord {
   updatedAt: string;
 }
 
+export type StorageMode = 'cloud_kv' | 'local_file' | 'tmp_ephemeral';
+
 export interface PersistedDatabase {
   menuSeeded: boolean;
   menuItems: MenuItem[];
@@ -57,6 +59,20 @@ const TMP_DB_PATH = '/tmp/frescanto-db.json';
 const KV_KEY = 'frescanto:db:v1';
 
 let memoryCache: PersistedDatabase | null = null;
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Serializes mutating load-modify-save database operations within this process
+ * so concurrent requests never overwrite each other's updates.
+ */
+export function withDbLock<T>(operation: () => Promise<T>): Promise<T> {
+  const next = writeQueue.then(operation, operation);
+  writeQueue = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
 
 function getKvConfig(): { url: string; token: string } | null {
   const url =
@@ -81,6 +97,12 @@ function resolveWritableFilePath(): string {
   } catch {
     return TMP_DB_PATH;
   }
+}
+
+export function getStorageMode(): StorageMode {
+  if (getKvConfig()) return 'cloud_kv';
+  if (process.env.VERCEL === '1') return 'tmp_ephemeral';
+  return resolveWritableFilePath() === LOCAL_DB_PATH ? 'local_file' : 'tmp_ephemeral';
 }
 
 function normalizeDb(raw: Partial<PersistedDatabase> | null | undefined): PersistedDatabase {
@@ -111,21 +133,44 @@ function normalizeDb(raw: Partial<PersistedDatabase> | null | undefined): Persis
   };
 }
 
+async function kvCommand(
+  kv: { url: string; token: string },
+  command: string[]
+): Promise<{ result?: string | null; error?: string }> {
+  const res = await fetch(`${kv.url}/`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${kv.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(command),
+  });
+
+  const payload = (await res.json().catch(() => ({}))) as {
+    result?: string | null;
+    error?: string;
+  };
+
+  if (!res.ok || payload.error) {
+    throw new Error(payload.error || `KV HTTP ${res.status}`);
+  }
+  return payload;
+}
+
 export async function loadDatabase(): Promise<PersistedDatabase> {
   const kv = getKvConfig();
   if (kv) {
     try {
-      const res = await fetch(`${kv.url}/get/${encodeURIComponent(KV_KEY)}`, {
-        headers: { Authorization: `Bearer ${kv.token}` },
-      });
-      if (res.ok) {
-        const json = (await res.json()) as { result?: string | null };
-        if (json?.result) {
-          const parsed = JSON.parse(json.result) as Partial<PersistedDatabase>;
-          memoryCache = normalizeDb(parsed);
-          return memoryCache;
-        }
+      const json = await kvCommand(kv, ['GET', KV_KEY]);
+      if (typeof json.result === 'string' && json.result.length > 0) {
+        const parsed = JSON.parse(json.result) as Partial<PersistedDatabase>;
+        memoryCache = normalizeDb(parsed);
+        return memoryCache;
       }
+      // First-time initialization in empty cloud KV
+      const initial = createInitialDatabase();
+      await saveDatabase(initial);
+      return initial;
     } catch (err) {
       console.error('KV read failed, falling back to local store:', err);
     }
@@ -153,31 +198,25 @@ export async function loadDatabase(): Promise<PersistedDatabase> {
 }
 
 export async function saveDatabase(db: PersistedDatabase): Promise<void> {
-  memoryCache = db;
   const serialized = JSON.stringify(db, null, 2);
 
   const kv = getKvConfig();
   if (kv) {
-    try {
-      await fetch(`${kv.url}/set/${encodeURIComponent(KV_KEY)}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${kv.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: serialized,
-      });
-    } catch (err) {
-      console.error('KV write failed:', err);
-    }
+    // When Cloud KV is configured, persist authoritatively and fail loudly on write error
+    await kvCommand(kv, ['SET', KV_KEY, serialized]);
   }
+
+  memoryCache = db;
 
   try {
     const targetPath = resolveWritableFilePath();
-    const tmpPath = `${targetPath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, serialized, 'utf8');
+    const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, serialized, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmpPath, targetPath);
   } catch (err) {
-    console.error('File persistence warning:', err);
+    if (!kv) {
+      console.error('File persistence error:', err);
+      throw new Error('تعذر حفظ البيانات على القرص. يرجى المحاولة مرة أخرى.');
+    }
   }
 }

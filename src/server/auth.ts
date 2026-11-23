@@ -11,10 +11,38 @@ async function getSessionSecret(): Promise<string> {
   return db.sessionSecret;
 }
 
-// Simple in-memory sliding window rate limiter for login attempts
+// Bounded in-memory sliding window rate limiter for sensitive auth actions
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_LOGIN_ATTEMPTS = 8;
 const WINDOW_MS = 5 * 60 * 1000;
+const MAX_RATE_LIMIT_ENTRIES = 2000;
+
+function pruneRateLimitMap(now: number): void {
+  if (loginAttempts.size < MAX_RATE_LIMIT_ENTRIES) return;
+  for (const [key, entry] of loginAttempts.entries()) {
+    if (now > entry.resetAt) {
+      loginAttempts.delete(key);
+    }
+  }
+  if (loginAttempts.size >= MAX_RATE_LIMIT_ENTRIES) {
+    const oldestKey = loginAttempts.keys().next().value;
+    if (oldestKey) loginAttempts.delete(oldestKey);
+  }
+}
+
+export function getClientKey(req: Request): string {
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) {
+    return realIp.trim().slice(0, 64);
+  }
+  const forwarded = req.headers['x-forwarded-for'];
+  const first = Array.isArray(forwarded)
+    ? forwarded[0]
+    : typeof forwarded === 'string'
+    ? forwarded.split(',')[0]
+    : req.ip;
+  return (first || 'unknown').trim().slice(0, 64);
+}
 
 export function getEnvAdminPassword(): string {
   return process.env.ADMIN_PASSWORD?.trim() || '';
@@ -82,6 +110,7 @@ export function checkLoginRateLimit(clientKey: string): {
 
 export function recordFailedLogin(clientKey: string): void {
   const now = Date.now();
+  pruneRateLimitMap(now);
   const entry = loginAttempts.get(clientKey);
   if (!entry || now > entry.resetAt) {
     loginAttempts.set(clientKey, { count: 1, resetAt: now + WINDOW_MS });

@@ -8,10 +8,22 @@ interface SafeImageProps {
   fallbackLabel?: string;
 }
 
+function isSafeImageSrc(src: string): boolean {
+  const trimmed = src.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('/')) return !trimmed.startsWith('//');
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 export function SafeImage({ src, alt, className = '', fallbackLabel }: SafeImageProps) {
   const [failed, setFailed] = useState(false);
 
-  if (!src || failed) {
+  if (!isSafeImageSrc(src) || failed) {
     return (
       <div
         className={`flex flex-col items-center justify-center bg-gradient-to-br from-[#F3F2EE] to-[#E6E8E1] text-[#4A5546] p-4 text-center ${className}`}

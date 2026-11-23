@@ -10,6 +10,7 @@ import {
 } from '../types';
 import { CATEGORY_DEFAULT_IMAGE, FRESCANTO_IMAGES } from '../data/defaultMenu';
 import { SafeImage } from './SafeImage';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface CustomerMenuViewProps {
   items: MenuItem[];
@@ -156,7 +157,7 @@ export function CustomerMenuView({
                 </h1>
               </div>
 
-              <div className="flex flex-wrap items-center gap-4 pt-2">
+              <div className="flex flex-wrap items-center gap-3 pt-2">
                 <a
                   href="#menu"
                   className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#15803D] text-white text-sm font-bold hover:bg-[#166534] smooth-settle whitespace-nowrap shrink-0"
@@ -164,7 +165,8 @@ export function CustomerMenuView({
                   <span>تصفح المنيو الآن</span>
                   <ArrowDown className="w-4 h-4" />
                 </a>
-                <span className="text-xs font-semibold text-[#5C6158] tabular-nums">
+                <PWAInstallButton variant="hero" />
+                <span className="text-xs font-semibold text-[#5C6158] tabular-nums w-full sm:w-auto">
                   {availableItems.length} أصناف طازجة متاحة اليوم
                 </span>
               </div>

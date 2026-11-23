@@ -1,4 +1,7 @@
-import type { Timestamp } from 'firebase/firestore';
+export interface TimestampLike {
+  toDate?: () => Date;
+  toMillis?: () => number;
+}
 
 export type MenuCategory =
   | 'fruit_salad'
@@ -42,8 +45,8 @@ export interface MenuItem {
   isFeatured: boolean;
   sortOrder: number;
   createdBy?: string;
-  createdAt?: Timestamp | null;
-  updatedAt?: Timestamp | null;
+  createdAt?: TimestampLike | null;
+  updatedAt?: TimestampLike | null;
 }
 
 export interface OrderItem {
@@ -72,8 +75,8 @@ export interface Order {
   notes: string;
   createdBy: string;
   createdAtIso?: string;
-  createdAt?: Timestamp | null;
-  updatedAt?: Timestamp | null;
+  createdAt?: TimestampLike | null;
+  updatedAt?: TimestampLike | null;
 }
 
 export interface Expense {
@@ -87,8 +90,8 @@ export interface Expense {
   notes: string;
   createdBy: string;
   createdAtIso?: string;
-  createdAt?: Timestamp | null;
-  updatedAt?: Timestamp | null;
+  createdAt?: TimestampLike | null;
+  updatedAt?: TimestampLike | null;
 }
 
 export interface DailyClosing {
@@ -114,8 +117,8 @@ export interface DailyClosing {
   status: 'closed';
   closedBy: string;
   closedByEmail: string;
-  createdAt?: Timestamp | null;
-  updatedAt?: Timestamp | null;
+  createdAt?: TimestampLike | null;
+  updatedAt?: TimestampLike | null;
 }
 
 export interface MonthlyClosing {
@@ -136,8 +139,8 @@ export interface MonthlyClosing {
   status: 'closed';
   closedBy: string;
   closedByEmail: string;
-  createdAt?: Timestamp | null;
-  updatedAt?: Timestamp | null;
+  createdAt?: TimestampLike | null;
+  updatedAt?: TimestampLike | null;
 }
 
 export interface StoreSettings {
@@ -148,7 +151,7 @@ export interface StoreSettings {
   workingHours: string;
   currency: string;
   isPublic: boolean;
-  updatedAt?: Timestamp | null;
+  updatedAt?: TimestampLike | null;
 }
 
 export const CATEGORY_LABELS: Record<MenuCategory, string> = {
@@ -244,7 +247,7 @@ export function formatArabicMonth(monthKey: string): string {
   });
 }
 
-export function formatOrderTime(ts?: Timestamp | null, iso?: string): string {
+export function formatOrderTime(ts?: TimestampLike | null, iso?: string): string {
   if (iso) {
     const parsed = new Date(iso);
     if (!Number.isNaN(parsed.getTime())) {

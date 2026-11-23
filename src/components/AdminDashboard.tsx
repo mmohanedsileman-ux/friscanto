@@ -40,6 +40,7 @@ import { MonthlyClosingView } from './admin/MonthlyClosingView';
 import { AnalyticsView } from './admin/AnalyticsView';
 import { MenuManagerView } from './admin/MenuManagerView';
 import { StoreSettingsView } from './admin/StoreSettingsView';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface AdminDashboardProps {
   authToken: string;
@@ -81,6 +82,7 @@ export function AdminDashboard({
   const [monthlyClosings, setMonthlyClosings] = useState<MonthlyClosing[]>([]);
   const [adminSettings, setAdminSettings] = useState<StoreSettings>(settings);
   const [envManaged, setEnvManaged] = useState(managedByEnv);
+  const [storageMode, setStorageMode] = useState<'cloud_kv' | 'local_file' | 'tmp_ephemeral' | null>(null);
   const [loadingError, setLoadingError] = useState<string | null>(null);
 
   // Security & Reset Modal State
@@ -108,6 +110,7 @@ export function AdminDashboard({
       setMonthlyClosings(data.monthlyClosings);
       setAdminSettings(data.storeSettings);
       setEnvManaged(data.managedByEnv);
+      setStorageMode(data.storageMode ?? null);
       setMenuLoaded(true);
     } catch (err) {
       if (err instanceof UnauthorizedError) {
@@ -249,6 +252,7 @@ export function AdminDashboard({
         </nav>
 
         <div className="p-4 border-t border-[#EFECE4] space-y-2">
+          <PWAInstallButton variant="sidebar" />
           <button
             type="button"
             onClick={openSecurityModal}
@@ -325,6 +329,7 @@ export function AdminDashboard({
             </div>
 
             <div className="space-y-2 pt-4 border-t border-[#EFECE4]">
+              <PWAInstallButton variant="sidebar" />
               <button
                 type="button"
                 onClick={() => {
@@ -410,6 +415,17 @@ export function AdminDashboard({
 
         {/* Active View Content */}
         <main className="flex-1 p-4 sm:p-8 max-w-7xl w-full mx-auto">
+          {storageMode === 'tmp_ephemeral' && (
+            <div className="mb-6 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-xs sm:text-sm text-amber-950 flex items-start gap-2.5 no-print">
+              <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <span>
+                تنبيه مهم لحفظ البيانات على Vercel: قاعدة البيانات السحابية (Upstash Redis) غير
+                مربوطة بعد. قم بربطها من تبويب <strong>Storage</strong> في مشروعك على Vercel ثم
+                اعمل <strong>Redeploy</strong> لضمان حفظ الأوردرات والحسابات بشكل دائم.
+              </span>
+            </div>
+          )}
+
           {loadingError && (
             <div className="mb-6 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-900 flex items-center justify-between gap-3">
               <span>{loadingError}</span>
