@@ -1,0 +1,410 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDateKey(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidMonthKey(val) {
+      return val is string && val.size() == 7 && val.matches('^[0-9]{4}-[0-9]{2}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'mmohanedsileman@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerified() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidMenuItem(data) {
+      return data.keys().hasAll([
+          'name', 'category', 'description', 'price', 'size',
+          'imageUrl', 'isAvailable', 'isFeatured', 'sortOrder',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'name', 'nameEn', 'category', 'description', 'price', 'size',
+          'imageUrl', 'isAvailable', 'isFeatured', 'sortOrder',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && (!('nameEn' in data) || (data.nameEn is string && data.nameEn.size() <= 100))
+        && data.category is string && data.category in ['fruit_salad', 'fresh_juices', 'smoothies', 'cut_cups', 'family_boxes', 'addons']
+        && data.description is string && data.description.size() <= 300
+        && data.price is number && data.price >= 0 && data.price <= 100000
+        && data.size is string && data.size.size() <= 40
+        && data.imageUrl is string && data.imageUrl.size() <= 500
+        && data.isAvailable is bool
+        && data.isFeatured is bool
+        && data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 10000
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrderItem(item) {
+      return item is map
+        && item.keys().hasAll(['itemId', 'name', 'category', 'unitPrice', 'quantity', 'lineTotal'])
+        && item.keys().hasOnly(['itemId', 'name', 'category', 'unitPrice', 'quantity', 'lineTotal'])
+        && isValidId(item.itemId)
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 100
+        && item.category is string && item.category in ['fruit_salad', 'fresh_juices', 'smoothies', 'cut_cups', 'family_boxes', 'addons']
+        && item.unitPrice is number && item.unitPrice >= 0 && item.unitPrice <= 100000
+        && item.quantity is number && item.quantity >= 1 && item.quantity <= 200
+        && item.lineTotal is number && item.lineTotal >= 0 && item.lineTotal <= 1000000;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'orderNumber', 'dateKey', 'monthKey', 'orderType', 'paymentMethod',
+          'status', 'items', 'itemCount', 'subtotal', 'discount', 'total',
+          'customerName', 'notes', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderNumber', 'dateKey', 'monthKey', 'orderType', 'paymentMethod',
+          'status', 'items', 'itemCount', 'subtotal', 'discount', 'total',
+          'customerName', 'notes', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 32 && data.orderNumber.matches('^[A-Z0-9\\-]+$')
+        && isValidDateKey(data.dateKey)
+        && isValidMonthKey(data.monthKey)
+        && data.orderType is string && data.orderType in ['dine_in', 'takeaway', 'delivery']
+        && data.paymentMethod is string && data.paymentMethod in ['cash', 'instapay', 'card']
+        && data.status is string && data.status in ['preparing', 'completed', 'cancelled']
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 30
+        && isValidOrderItem(data.items[0])
+        && data.itemCount is number && data.itemCount >= 1 && data.itemCount <= 500
+        && data.subtotal is number && data.subtotal >= 0 && data.subtotal <= 1000000
+        && data.discount is number && data.discount >= 0 && data.discount <= data.subtotal
+        && data.total is number && data.total >= 0 && data.total <= 1000000
+        && data.customerName is string && data.customerName.size() <= 100
+        && data.notes is string && data.notes.size() <= 300
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll([
+          'dateKey', 'monthKey', 'title', 'category', 'amount',
+          'paymentSource', 'notes', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'dateKey', 'monthKey', 'title', 'category', 'amount',
+          'paymentSource', 'notes', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && isValidDateKey(data.dateKey)
+        && isValidMonthKey(data.monthKey)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.category is string && data.category in ['fruits', 'packaging', 'utilities', 'salaries', 'rent', 'other']
+        && data.amount is number && data.amount > 0 && data.amount <= 1000000
+        && data.paymentSource is string && data.paymentSource in ['cash_drawer', 'bank_transfer']
+        && data.notes is string && data.notes.size() <= 300
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDailyClosing(data) {
+      return data.keys().hasAll([
+          'dateKey', 'monthKey', 'ordersCount', 'cancelledCount', 'grossSales',
+          'totalDiscounts', 'netSales', 'cashSales', 'instapaySales', 'cardSales',
+          'totalExpenses', 'cashExpenses', 'openingCash', 'expectedCash', 'actualCash',
+          'cashVariance', 'netProfit', 'notes', 'status', 'closedBy', 'closedByEmail',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'dateKey', 'monthKey', 'ordersCount', 'cancelledCount', 'grossSales',
+          'totalDiscounts', 'netSales', 'cashSales', 'instapaySales', 'cardSales',
+          'totalExpenses', 'cashExpenses', 'openingCash', 'expectedCash', 'actualCash',
+          'cashVariance', 'netProfit', 'notes', 'status', 'closedBy', 'closedByEmail',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidDateKey(data.dateKey)
+        && isValidMonthKey(data.monthKey)
+        && data.ordersCount is number && data.ordersCount >= 0 && data.ordersCount <= 100000
+        && data.cancelledCount is number && data.cancelledCount >= 0 && data.cancelledCount <= 100000
+        && data.grossSales is number && data.grossSales >= 0 && data.grossSales <= 10000000
+        && data.totalDiscounts is number && data.totalDiscounts >= 0 && data.totalDiscounts <= 10000000
+        && data.netSales is number && data.netSales >= 0 && data.netSales <= 10000000
+        && data.cashSales is number && data.cashSales >= 0 && data.cashSales <= 10000000
+        && data.instapaySales is number && data.instapaySales >= 0 && data.instapaySales <= 10000000
+        && data.cardSales is number && data.cardSales >= 0 && data.cardSales <= 10000000
+        && data.totalExpenses is number && data.totalExpenses >= 0 && data.totalExpenses <= 10000000
+        && data.cashExpenses is number && data.cashExpenses >= 0 && data.cashExpenses <= 10000000
+        && data.openingCash is number && data.openingCash >= 0 && data.openingCash <= 10000000
+        && data.expectedCash is number && data.expectedCash >= -10000000 && data.expectedCash <= 10000000
+        && data.actualCash is number && data.actualCash >= 0 && data.actualCash <= 10000000
+        && data.cashVariance is number && data.cashVariance >= -10000000 && data.cashVariance <= 10000000
+        && data.netProfit is number && data.netProfit >= -10000000 && data.netProfit <= 10000000
+        && data.notes is string && data.notes.size() <= 400
+        && data.status == 'closed'
+        && isValidId(data.closedBy)
+        && data.closedByEmail is string && data.closedByEmail.size() >= 3 && data.closedByEmail.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMonthlyClosing(data) {
+      return data.keys().hasAll([
+          'monthKey', 'daysClosedCount', 'ordersCount', 'netSales', 'cashSales',
+          'instapaySales', 'cardSales', 'totalExpenses', 'fixedExpenses', 'netProfit',
+          'topProductName', 'topProductQty', 'notes', 'status', 'closedBy',
+          'closedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'monthKey', 'daysClosedCount', 'ordersCount', 'netSales', 'cashSales',
+          'instapaySales', 'cardSales', 'totalExpenses', 'fixedExpenses', 'netProfit',
+          'topProductName', 'topProductQty', 'notes', 'status', 'closedBy',
+          'closedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && isValidMonthKey(data.monthKey)
+        && data.daysClosedCount is number && data.daysClosedCount >= 0 && data.daysClosedCount <= 31
+        && data.ordersCount is number && data.ordersCount >= 0 && data.ordersCount <= 1000000
+        && data.netSales is number && data.netSales >= 0 && data.netSales <= 100000000
+        && data.cashSales is number && data.cashSales >= 0 && data.cashSales <= 100000000
+        && data.instapaySales is number && data.instapaySales >= 0 && data.instapaySales <= 100000000
+        && data.cardSales is number && data.cardSales >= 0 && data.cardSales <= 100000000
+        && data.totalExpenses is number && data.totalExpenses >= 0 && data.totalExpenses <= 100000000
+        && data.fixedExpenses is number && data.fixedExpenses >= 0 && data.fixedExpenses <= 100000000
+        && data.netProfit is number && data.netProfit >= -100000000 && data.netProfit <= 100000000
+        && data.topProductName is string && data.topProductName.size() <= 120
+        && data.topProductQty is number && data.topProductQty >= 0 && data.topProductQty <= 1000000
+        && data.notes is string && data.notes.size() <= 500
+        && data.status == 'closed'
+        && isValidId(data.closedBy)
+        && data.closedByEmail is string && data.closedByEmail.size() >= 3 && data.closedByEmail.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStoreSettings(data) {
+      return data.keys().hasAll([
+          'storeName', 'tagline', 'phone', 'address', 'workingHours',
+          'currency', 'isPublic', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'storeName', 'tagline', 'phone', 'address', 'workingHours',
+          'currency', 'isPublic', 'updatedAt'
+        ])
+        && data.storeName is string && data.storeName.size() >= 1 && data.storeName.size() <= 80
+        && data.tagline is string && data.tagline.size() <= 160
+        && data.phone is string && data.phone.size() <= 32
+        && data.address is string && data.address.size() <= 200
+        && data.workingHours is string && data.workingHours.size() <= 100
+        && data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 12
+        && data.isPublic is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMember(data) {
+      return data.keys().hasAll(['email', 'name', 'role', 'addedBy', 'createdAt'])
+        && data.keys().hasOnly(['email', 'name', 'role', 'addedBy', 'createdAt'])
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.role is string && data.role in ['admin', 'cashier']
+        && isValidId(data.addedBy)
+        && data.createdAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // Public Customer Menu (available items public; all items & writes admin-only)
+    match /menuItems/{itemId} {
+      allow get: if isValidId(itemId) && (existing().isAvailable == true || isAdmin());
+      allow list: if existing().isAvailable == true || isBootstrappedAdmin();
+      allow create: if isSignedIn()
+        && isValidId(itemId)
+        && isValidMenuItem(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isSignedIn()
+        && isValidId(itemId)
+        && isValidMenuItem(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'nameEn', 'category', 'description', 'price', 'size',
+          'imageUrl', 'isAvailable', 'isFeatured', 'sortOrder', 'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if isSignedIn() && isValidId(itemId) && isAdmin();
+    }
+
+    // POS Orders (Admin-only)
+    match /orders/{orderId} {
+      allow get: if isSignedIn() && isValidId(orderId) && isAdmin();
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().createdBy == request.auth.uid);
+      allow create: if isSignedIn()
+        && isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isSignedIn()
+        && isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().orderNumber == existing().orderNumber
+        && incoming().updatedAt == request.time
+        && (existing().status != 'cancelled' || isBootstrappedAdmin())
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'paymentMethod', 'notes', 'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if isSignedIn() && isValidId(orderId) && isBootstrappedAdmin();
+    }
+
+    // Daily & Monthly Expenses (Admin-only)
+    match /expenses/{expenseId} {
+      allow get: if isSignedIn() && isValidId(expenseId) && isAdmin();
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().createdBy == request.auth.uid);
+      allow create: if isSignedIn()
+        && isValidId(expenseId)
+        && isValidExpense(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isSignedIn()
+        && isValidId(expenseId)
+        && isValidExpense(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'category', 'amount', 'paymentSource', 'notes', 'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if isSignedIn() && isValidId(expenseId) && isAdmin();
+    }
+
+    // Daily Closings / Z-Reports (Admin-only)
+    match /dailyClosings/{dateKey} {
+      allow get: if isSignedIn() && isValidDateKey(dateKey) && isAdmin();
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().closedBy == request.auth.uid);
+      allow create: if isSignedIn()
+        && isValidDateKey(dateKey)
+        && isValidDailyClosing(incoming())
+        && incoming().dateKey == dateKey
+        && incoming().closedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isSignedIn()
+        && isValidDateKey(dateKey)
+        && isValidDailyClosing(incoming())
+        && incoming().dateKey == existing().dateKey
+        && incoming().closedBy == existing().closedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'ordersCount', 'cancelledCount', 'grossSales', 'totalDiscounts',
+          'netSales', 'cashSales', 'instapaySales', 'cardSales',
+          'totalExpenses', 'cashExpenses', 'openingCash', 'expectedCash',
+          'actualCash', 'cashVariance', 'netProfit', 'notes', 'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if isSignedIn() && isValidDateKey(dateKey) && isBootstrappedAdmin();
+    }
+
+    // Monthly Closings (Admin-only)
+    match /monthlyClosings/{monthKey} {
+      allow get: if isSignedIn() && isValidMonthKey(monthKey) && isAdmin();
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().closedBy == request.auth.uid);
+      allow create: if isSignedIn()
+        && isValidMonthKey(monthKey)
+        && isValidMonthlyClosing(incoming())
+        && incoming().monthKey == monthKey
+        && incoming().closedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isSignedIn()
+        && isValidMonthKey(monthKey)
+        && isValidMonthlyClosing(incoming())
+        && incoming().monthKey == existing().monthKey
+        && incoming().closedBy == existing().closedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'daysClosedCount', 'ordersCount', 'netSales', 'cashSales',
+          'instapaySales', 'cardSales', 'totalExpenses', 'fixedExpenses',
+          'netProfit', 'topProductName', 'topProductQty', 'notes', 'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if isSignedIn() && isValidMonthKey(monthKey) && isBootstrappedAdmin();
+    }
+
+    // Store Settings (Public read for 'main', Admin write)
+    match /storeSettings/{settingId} {
+      allow get: if isValidId(settingId) && (existing().isPublic == true || isAdmin());
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidId(settingId)
+        && isValidStoreSettings(incoming())
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isSignedIn()
+        && isValidId(settingId)
+        && isValidStoreSettings(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'storeName', 'tagline', 'phone', 'address', 'workingHours',
+          'currency', 'isPublic', 'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if false;
+    }
+
+    // Admin Registry (PII-isolated)
+    match /admins/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isBootstrappedAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isBootstrappedAdmin()
+        && isValidId(userId)
+        && isValidAdminMember(incoming())
+        && incoming().addedBy == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isBootstrappedAdmin() && isValidId(userId);
+    }
+  }
+}

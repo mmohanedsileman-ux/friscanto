@@ -1,0 +1,6 @@
+{
+  "name": "فريسكانتو — Frescanto Fresh Fruit Bar",
+  "description": "تطبيق منيو العملاء وإدارة الكاشير وتقفيل الحسابات اليومية والشهرية وتحليل المبيعات لمحل الفواكه الفريش فريسكانتو.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,409 @@
+{
+  "entities": {
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "A fresh fruit item, fruit salad, juice, smoothie, or box offered on the Frescanto menu.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Arabic display name of the product"
+        },
+        "nameEn": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Optional English display name"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["fruit_salad", "fresh_juices", "smoothies", "cut_cups", "family_boxes", "addons"],
+          "description": "Menu category key"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Short ingredients or serving description"
+        },
+        "price": {
+          "type": "number",
+          "description": "Unit price in EGP"
+        },
+        "size": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Serving size label (e.g. وسط، كبير، 500 مل)"
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Relative asset path or image URL"
+        },
+        "isAvailable": {
+          "type": "boolean",
+          "description": "Whether the product is currently visible to customers and orderable"
+        },
+        "isFeatured": {
+          "type": "boolean",
+          "description": "Whether the product is highlighted in featured picks"
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Display ordering index"
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "category",
+        "description",
+        "price",
+        "size",
+        "imageUrl",
+        "isAvailable",
+        "isFeatured",
+        "sortOrder",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A point-of-sale customer order logged by Frescanto management.",
+      "type": "object",
+      "properties": {
+        "orderNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[A-Z0-9\\-]+$"
+        },
+        "dateKey": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "Local business date YYYY-MM-DD"
+        },
+        "monthKey": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}$",
+          "description": "Local business month YYYY-MM"
+        },
+        "orderType": {
+          "type": "string",
+          "enum": ["dine_in", "takeaway", "delivery"]
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["cash", "instapay", "card"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["preparing", "completed", "cancelled"]
+        },
+        "items": {
+          "type": "array",
+          "description": "Bounded list of ordered line items (max 30)"
+        },
+        "itemCount": {
+          "type": "number"
+        },
+        "subtotal": {
+          "type": "number"
+        },
+        "discount": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "customerName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "orderNumber",
+        "dateKey",
+        "monthKey",
+        "orderType",
+        "paymentMethod",
+        "status",
+        "items",
+        "itemCount",
+        "subtotal",
+        "discount",
+        "total",
+        "customerName",
+        "notes",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "An operational expense logged against a business day and month.",
+      "type": "object",
+      "properties": {
+        "dateKey": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "monthKey": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "enum": ["fruits", "packaging", "utilities", "salaries", "rent", "other"]
+        },
+        "amount": {
+          "type": "number"
+        },
+        "paymentSource": {
+          "type": "string",
+          "enum": ["cash_drawer", "bank_transfer"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "dateKey",
+        "monthKey",
+        "title",
+        "category",
+        "amount",
+        "paymentSource",
+        "notes",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DailyClosing": {
+      "title": "DailyClosing",
+      "description": "End-of-day financial closing record (Z-Report) for a business date.",
+      "type": "object",
+      "properties": {
+        "dateKey": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "monthKey": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "ordersCount": { "type": "number" },
+        "cancelledCount": { "type": "number" },
+        "grossSales": { "type": "number" },
+        "totalDiscounts": { "type": "number" },
+        "netSales": { "type": "number" },
+        "cashSales": { "type": "number" },
+        "instapaySales": { "type": "number" },
+        "cardSales": { "type": "number" },
+        "totalExpenses": { "type": "number" },
+        "cashExpenses": { "type": "number" },
+        "openingCash": { "type": "number" },
+        "expectedCash": { "type": "number" },
+        "actualCash": { "type": "number" },
+        "cashVariance": { "type": "number" },
+        "netProfit": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 400 },
+        "status": { "type": "string", "enum": ["closed"] },
+        "closedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "closedByEmail": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "dateKey",
+        "monthKey",
+        "ordersCount",
+        "cancelledCount",
+        "grossSales",
+        "totalDiscounts",
+        "netSales",
+        "cashSales",
+        "instapaySales",
+        "cardSales",
+        "totalExpenses",
+        "cashExpenses",
+        "openingCash",
+        "expectedCash",
+        "actualCash",
+        "cashVariance",
+        "netProfit",
+        "notes",
+        "status",
+        "closedBy",
+        "closedByEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MonthlyClosing": {
+      "title": "MonthlyClosing",
+      "description": "End-of-month financial closing summary.",
+      "type": "object",
+      "properties": {
+        "monthKey": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$" },
+        "daysClosedCount": { "type": "number" },
+        "ordersCount": { "type": "number" },
+        "netSales": { "type": "number" },
+        "cashSales": { "type": "number" },
+        "instapaySales": { "type": "number" },
+        "cardSales": { "type": "number" },
+        "totalExpenses": { "type": "number" },
+        "fixedExpenses": { "type": "number" },
+        "netProfit": { "type": "number" },
+        "topProductName": { "type": "string", "maxLength": 120 },
+        "topProductQty": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["closed"] },
+        "closedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "closedByEmail": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "monthKey",
+        "daysClosedCount",
+        "ordersCount",
+        "netSales",
+        "cashSales",
+        "instapaySales",
+        "cardSales",
+        "totalExpenses",
+        "fixedExpenses",
+        "netProfit",
+        "topProductName",
+        "topProductQty",
+        "notes",
+        "status",
+        "closedBy",
+        "closedByEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Public storefront info (hours, contact, location) editable only by admin.",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "tagline": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "address": { "type": "string", "maxLength": 200 },
+        "workingHours": { "type": "string", "maxLength": 100 },
+        "currency": { "type": "string", "maxLength": 12 },
+        "isPublic": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "storeName",
+        "tagline",
+        "phone",
+        "address",
+        "workingHours",
+        "currency",
+        "isPublic",
+        "updatedAt"
+      ]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Authorized management user entry for Frescanto.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "cashier"] },
+        "addedBy": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "role", "addedBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/menuItems/{itemId}": {
+      "schema": { "$ref": "#/entities/MenuItem" },
+      "description": "Publicly readable available menu items; admin-only writes and full management reads."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "POS orders created and managed exclusively by verified Frescanto admins."
+    },
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Daily and monthly business expenses managed exclusively by admins."
+    },
+    "/dailyClosings/{dateKey}": {
+      "schema": { "$ref": "#/entities/DailyClosing" },
+      "description": "End-of-day financial closings keyed by YYYY-MM-DD."
+    },
+    "/monthlyClosings/{monthKey}": {
+      "schema": { "$ref": "#/entities/MonthlyClosing" },
+      "description": "End-of-month financial closings keyed by YYYY-MM."
+    },
+    "/storeSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/StoreSettings" },
+      "description": "Public store details (main document) editable exclusively by admins."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Authorized admin/staff records isolated from public access."
+    }
+  }
+}
