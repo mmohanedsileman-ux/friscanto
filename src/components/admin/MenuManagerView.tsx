@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Plus,
   Pencil,
@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
-  Save,
   Sparkles,
 } from 'lucide-react';
 import {
@@ -28,7 +27,6 @@ import {
   seedDefaultMenu,
   UnauthorizedError,
   updateMenuItem,
-  updateStoreSettings,
 } from '../../lib/api';
 import { SafeImage } from '../SafeImage';
 
@@ -85,22 +83,6 @@ export function MenuManagerView({
   const [seeding, setSeeding] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // Store Settings Form
-  const [storeName, setStoreName] = useState(settings.storeName);
-  const [tagline, setTagline] = useState(settings.tagline);
-  const [phone, setPhone] = useState(settings.phone);
-  const [address, setAddress] = useState(settings.address);
-  const [workingHours, setWorkingHours] = useState(settings.workingHours);
-  const [savingSettings, setSavingSettings] = useState(false);
-
-  useEffect(() => {
-    setStoreName(settings.storeName);
-    setTagline(settings.tagline);
-    setPhone(settings.phone);
-    setAddress(settings.address);
-    setWorkingHours(settings.workingHours);
-  }, [settings]);
 
   const handleSeedDefaultMenu = async () => {
     if (seeding) return;
@@ -226,34 +208,6 @@ export function MenuManagerView({
         return;
       }
       setErrorMsg(error instanceof Error ? error.message : 'تعذر حذف الصنف.');
-    }
-  };
-
-  const handleSaveStoreSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!storeName.trim() || savingSettings) return;
-    setSavingSettings(true);
-    setStatusMessage(null);
-    setErrorMsg(null);
-    try {
-      await updateStoreSettings(authToken, {
-        storeName: storeName.trim().slice(0, 80),
-        tagline: tagline.trim().slice(0, 160),
-        phone: phone.trim().slice(0, 32),
-        address: address.trim().slice(0, 200),
-        workingHours: workingHours.trim().slice(0, 100),
-        currency: 'ج.م',
-      });
-      setStatusMessage('تم تحديث بيانات ومعلومات المحل في صفحة العملاء بنجاح.');
-      await Promise.all([onDataChanged(), onPublicDataChanged()]);
-    } catch (error) {
-      if (error instanceof UnauthorizedError) {
-        onUnauthorized();
-        return;
-      }
-      setErrorMsg(error instanceof Error ? error.message : 'تعذر تحديث بيانات المحل.');
-    } finally {
-      setSavingSettings(false);
     }
   };
 
@@ -413,97 +367,6 @@ export function MenuManagerView({
           </table>
         </div>
       </div>
-
-      {/* Store Settings Editor */}
-      <form
-        onSubmit={handleSaveStoreSettings}
-        className="bg-white border border-[#E5E3DC] rounded-2xl p-6 space-y-5"
-      >
-        <div>
-          <h3 className="font-display text-base font-bold text-[#171916]">
-            بيانات المحل الظاهرة للعملاء
-          </h3>
-          <p className="text-xs text-[#676D62] mt-0.5">
-            تظهر هذه البيانات في واجهة المنيو العامة (العنوان، الهاتف، ومواعيد العمل).
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-[#52584D] mb-1">
-              اسم المحل
-            </label>
-            <input
-              type="text"
-              required
-              maxLength={80}
-              value={storeName}
-              onChange={(e) => setStoreName(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-[#52584D] mb-1">
-              رقم الهاتف / الواتساب
-            </label>
-            <input
-              type="text"
-              maxLength={32}
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm font-mono-num bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
-              dir="ltr"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-[#52584D] mb-1">
-              الوصف التعريفي (السلوجان)
-            </label>
-            <input
-              type="text"
-              maxLength={160}
-              value={tagline}
-              onChange={(e) => setTagline(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-[#52584D] mb-1">
-              العنوان
-            </label>
-            <input
-              type="text"
-              maxLength={200}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-[#52584D] mb-1">
-              مواعيد العمل
-            </label>
-            <input
-              type="text"
-              maxLength={100}
-              value={workingHours}
-              onChange={(e) => setWorkingHours(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
-            />
-          </div>
-        </div>
-
-        <div className="flex justify-end">
-          <button
-            type="submit"
-            disabled={savingSettings}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#171916] text-white text-sm font-bold hover:bg-[#14532D] cursor-pointer"
-          >
-            <Save className="w-4 h-4" />
-            <span>{savingSettings ? 'جاري الحفظ...' : 'حفظ بيانات المحل'}</span>
-          </button>
-        </div>
-      </form>
 
       {/* Add / Edit Item Modal */}
       {modalOpen && (

@@ -356,9 +356,17 @@ export function CustomerMenuView({
               <Phone className="w-5 h-5 text-[#15803D] shrink-0 mt-0.5" />
               <div>
                 <p className="font-display text-sm font-bold text-[#171916]">للاستفسار والتواصل</p>
-                <p className="text-xs sm:text-sm text-[#5C6158] font-mono-num mt-1" dir="ltr">
-                  {settings.phone}
-                </p>
+                {settings.phone ? (
+                  <a
+                    href={`tel:${settings.phone.replace(/[^0-9+]/g, '')}`}
+                    className="inline-block text-xs sm:text-sm text-[#14532D] hover:underline font-mono-num mt-1"
+                    dir="ltr"
+                  >
+                    {settings.phone}
+                  </a>
+                ) : (
+                  <p className="text-xs sm:text-sm text-[#5C6158] mt-1">—</p>
+                )}
               </div>
             </div>
           </div>

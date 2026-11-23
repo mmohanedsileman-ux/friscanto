@@ -20,7 +20,14 @@ export type ExpenseCategory =
   | 'other';
 export type PaymentSource = 'cash_drawer' | 'bank_transfer';
 
-export type AdminTab = 'pos' | 'accounts' | 'daily' | 'monthly' | 'analytics' | 'menu';
+export type AdminTab =
+  | 'pos'
+  | 'accounts'
+  | 'daily'
+  | 'monthly'
+  | 'analytics'
+  | 'menu'
+  | 'settings';
 
 export interface MenuItem {
   id: string;

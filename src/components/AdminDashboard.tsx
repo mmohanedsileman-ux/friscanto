@@ -14,6 +14,7 @@ import {
   RotateCcw,
   CheckCircle2,
   AlertTriangle,
+  MapPin,
 } from 'lucide-react';
 import {
   type AdminTab,
@@ -38,6 +39,7 @@ import { DailyClosingView } from './admin/DailyClosingView';
 import { MonthlyClosingView } from './admin/MonthlyClosingView';
 import { AnalyticsView } from './admin/AnalyticsView';
 import { MenuManagerView } from './admin/MenuManagerView';
+import { StoreSettingsView } from './admin/StoreSettingsView';
 
 interface AdminDashboardProps {
   authToken: string;
@@ -56,6 +58,7 @@ const NAV_ITEMS: { id: AdminTab; label: string; icon: typeof ShoppingBag }[] = [
   { id: 'monthly', label: 'تقفيل الحساب الشهري', icon: CalendarRange },
   { id: 'analytics', label: 'الأصناف الأكثر طلباً', icon: TrendingUp },
   { id: 'menu', label: 'إدارة المنيو والأسعار', icon: UtensilsCrossed },
+  { id: 'settings', label: 'بيانات المحل والتواصل', icon: MapPin },
 ];
 
 export function AdminDashboard({
@@ -479,6 +482,16 @@ export function AdminDashboard({
             <MenuManagerView
               menuItems={effectiveMenu}
               isUsingFallbackMenu={isUsingFallbackMenu}
+              settings={adminSettings}
+              authToken={authToken}
+              onDataChanged={loadAdminData}
+              onPublicDataChanged={onPublicDataChanged}
+              onUnauthorized={onLogout}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <StoreSettingsView
               settings={adminSettings}
               authToken={authToken}
               onDataChanged={loadAdminData}
