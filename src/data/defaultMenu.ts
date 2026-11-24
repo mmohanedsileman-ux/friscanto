@@ -2,25 +2,26 @@ import type { MenuCategory, MenuItem, StoreSettings } from '../types';
 
 export const FRESCANTO_IMAGES = {
   logo: '/pwa-192x192.png',
-  hero: '/assets/menu/hero-fruit-spread.png',
+  hero: '/assets/aistudio/Screenshot_20261123_231959_f47e20a2.jpg',
 };
 
+const menuImage = '/assets/aistudio/Screenshot_20261124_001358_33b03969.jpg';
+
 export const CATEGORY_DEFAULT_IMAGE: Record<MenuCategory, string> = {
-  fruit_salad: '/assets/menu/fruit-salad.png',
-  fresh_juices: '/assets/menu/fresh-juice.png',
-  smoothies: '/assets/menu/smoothie.png',
-  cut_cups: '/assets/menu/fruit-cup.png',
-  family_boxes: '/assets/menu/family-box.png',
-  addons: '/assets/menu/sweet-add-on.png',
+  fruit_salad: menuImage,
+  fresh_juices: menuImage,
+  smoothies: menuImage,
+  cut_cups: menuImage,
+  family_boxes: menuImage,
+  addons: menuImage,
 };
 
 export const STUDIO_IMAGE_OPTIONS = [
-  { label: 'سلطة فواكه', url: CATEGORY_DEFAULT_IMAGE.fruit_salad },
-  { label: 'عصائر طبيعية', url: CATEGORY_DEFAULT_IMAGE.fresh_juices },
-  { label: 'سموزي', url: CATEGORY_DEFAULT_IMAGE.smoothies },
-  { label: 'أكواب فواكه', url: CATEGORY_DEFAULT_IMAGE.cut_cups },
-  { label: 'بوكسات', url: CATEGORY_DEFAULT_IMAGE.family_boxes },
-  { label: 'إضافات حلوة', url: CATEGORY_DEFAULT_IMAGE.addons },
+  { label: 'فواكه طازجة', url: '/assets/aistudio/Screenshot_20261124_001358_33b03969.jpg' },
+  { label: 'عصائر طبيعية', url: '/assets/aistudio/Screenshot_20261124_010634_495f402d.jpg' },
+  { label: 'سموزي', url: '/assets/aistudio/Screenshot_20261124_010940_e2ae06e7.jpg' },
+  { label: 'أكواب فواكه', url: '/assets/aistudio/Screenshot_20261124_011513_fce0ef18.jpg' },
+  { label: 'بوكسات', url: '/assets/aistudio/Screenshot_20261124_011847_3bc7d7f2.jpg' },
 ] as const;
 
 export function resolveItemImage(
