@@ -65,8 +65,14 @@ function sanitizeString(val: unknown, maxLen: number): string {
 
 function sanitizeImageUrl(val: unknown, fallbackCategory: MenuCategory): string {
   const s = sanitizeString(val, 500);
-  if (!s) return CATEGORY_DEFAULT_IMAGE[fallbackCategory];
-  if (s.startsWith('/src/assets/')) return s;
+  if (
+    !s ||
+    s.startsWith('/src/assets/') ||
+    s.startsWith('/assets/aistudio/')
+  ) {
+    return CATEGORY_DEFAULT_IMAGE[fallbackCategory];
+  }
+  if (s.startsWith('/') && !s.startsWith('//') && !s.includes('\\')) return s;
   try {
     const parsed = new URL(s);
     if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
@@ -111,7 +117,12 @@ export function createApiApp(): express.Express {
       const db = await loadDatabase();
       res.setHeader('Cache-Control', 'no-cache');
       res.json({
-        menuItems: db.menuItems.filter((item) => item.isAvailable),
+        menuItems: db.menuItems
+          .filter((item) => item.isAvailable)
+          .map((item) => ({
+            ...item,
+            imageUrl: sanitizeImageUrl(item.imageUrl, item.category),
+          })),
         storeSettings: db.storeSettings,
       });
     })
@@ -291,7 +302,10 @@ export function createApiApp(): express.Express {
     asyncHandler(async (_req: Request, res: Response) => {
       const db = await loadDatabase();
       res.json({
-        menuItems: db.menuItems,
+        menuItems: db.menuItems.map((item) => ({
+          ...item,
+          imageUrl: sanitizeImageUrl(item.imageUrl, item.category),
+        })),
         orders: db.orders,
         expenses: db.expenses,
         dailyClosings: db.dailyClosings,
