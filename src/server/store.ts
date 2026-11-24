@@ -172,7 +172,8 @@ export async function loadDatabase(): Promise<PersistedDatabase> {
       await saveDatabase(initial);
       return initial;
     } catch (err) {
-      console.error('KV read failed, falling back to local store:', err);
+      console.error('KV read failed:', err);
+      throw new Error('تعذر الاتصال بمخزن البيانات السحابي.');
     }
   }
 

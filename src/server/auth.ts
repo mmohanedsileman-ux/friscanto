@@ -199,11 +199,15 @@ export async function requireAdmin(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const token = extractBearerToken(req);
-  const valid = await verifySessionToken(token);
-  if (!valid) {
-    res.status(401).json({ error: 'غير مصرح — يرجى إدخال كلمة سر الإدارة.' });
-    return;
+  try {
+    const token = extractBearerToken(req);
+    const valid = await verifySessionToken(token);
+    if (!valid) {
+      res.status(401).json({ error: 'غير مصرح — يرجى إدخال كلمة سر الإدارة.' });
+      return;
+    }
+    next();
+  } catch (error) {
+    next(error);
   }
-  next();
 }
