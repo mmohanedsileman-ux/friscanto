@@ -613,10 +613,7 @@ export function CustomerMenuView({
 
       {/* Minimal Footer with Subtle Admin Entry Link */}
       <footer className="border-t border-[#E7E5DE] bg-[#FAFAF8]">
-        <div className="max-w-7xl mx-auto px-5 sm:px-8 py-5 flex flex-wrap items-center justify-between gap-3 text-xs text-[#676D62]">
-          <p>
-            © {new Date().getFullYear()} {storeName} · Firstcanto
-          </p>
+        <div className="max-w-7xl mx-auto px-5 sm:px-8 py-5 flex items-center justify-center text-xs text-[#676D62]">
           <button
             type="button"
             onClick={onOpenAdmin}
