@@ -147,6 +147,7 @@ export interface StoreSettings {
   storeName: string;
   tagline: string;
   phone: string;
+  whatsapp?: string;
   address: string;
   workingHours: string;
   currency: string;

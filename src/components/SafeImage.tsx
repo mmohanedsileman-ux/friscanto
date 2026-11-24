@@ -6,6 +6,7 @@ interface SafeImageProps {
   alt: string;
   className?: string;
   fallbackLabel?: string;
+  eager?: boolean;
 }
 
 function isSafeImageSrc(src: string): boolean {
@@ -20,7 +21,13 @@ function isSafeImageSrc(src: string): boolean {
   }
 }
 
-export function SafeImage({ src, alt, className = '', fallbackLabel }: SafeImageProps) {
+export function SafeImage({
+  src,
+  alt,
+  className = '',
+  fallbackLabel,
+  eager = false,
+}: SafeImageProps) {
   const [failed, setFailed] = useState(false);
 
   if (!isSafeImageSrc(src) || failed) {
@@ -45,7 +52,8 @@ export function SafeImage({ src, alt, className = '', fallbackLabel }: SafeImage
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
       className={className}
-      loading="lazy"
+      loading={eager ? 'eager' : 'lazy'}
+      decoding="async"
     />
   );
 }

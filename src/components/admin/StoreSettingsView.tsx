@@ -21,6 +21,7 @@ export function StoreSettingsView({
   const [storeName, setStoreName] = useState(settings.storeName);
   const [tagline, setTagline] = useState(settings.tagline);
   const [phone, setPhone] = useState(settings.phone);
+  const [whatsapp, setWhatsapp] = useState(settings.whatsapp || '');
   const [address, setAddress] = useState(settings.address);
   const [workingHours, setWorkingHours] = useState(settings.workingHours);
 
@@ -32,6 +33,7 @@ export function StoreSettingsView({
     setStoreName(settings.storeName);
     setTagline(settings.tagline);
     setPhone(settings.phone);
+    setWhatsapp(settings.whatsapp || '');
     setAddress(settings.address);
     setWorkingHours(settings.workingHours);
   }, [settings]);
@@ -49,6 +51,7 @@ export function StoreSettingsView({
         storeName: storeName.trim().slice(0, 80),
         tagline: tagline.trim().slice(0, 160),
         phone: phone.trim().slice(0, 32),
+        whatsapp: whatsapp.trim().slice(0, 32),
         address: address.trim().slice(0, 200),
         workingHours: workingHours.trim().slice(0, 100),
         currency: settings.currency || 'ج.م',
@@ -75,7 +78,7 @@ export function StoreSettingsView({
           بيانات المحل والتواصل
         </h2>
         <p className="text-xs text-[#676D62] mt-1">
-          عدّل رقم الهاتف، العنوان، ومواعيد العمل لتظهر فوراً للعملاء في صفحة المنيو.
+          عدّل رقم الهاتف، الواتساب، العنوان، ومواعيد العمل لتظهر فوراً للعملاء في صفحة المنيو.
         </p>
       </div>
 
@@ -122,7 +125,7 @@ export function StoreSettingsView({
                 htmlFor="store-phone-input"
                 className="block text-xs font-bold text-[#171916] mb-1.5"
               >
-                رقم الهاتف / الواتساب
+                رقم الهاتف
               </label>
               <input
                 id="store-phone-input"
@@ -135,6 +138,25 @@ export function StoreSettingsView({
                 className="w-full px-3.5 py-2.5 text-sm font-mono-num bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
               />
             </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="store-whatsapp-input"
+              className="block text-xs font-bold text-[#171916] mb-1.5"
+            >
+              رقم واتساب للطلبات (اختياري — إذا تُرك فارغاً يُستخدم رقم الهاتف)
+            </label>
+            <input
+              id="store-whatsapp-input"
+              type="tel"
+              maxLength={32}
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+              placeholder="0100 000 0000"
+              dir="ltr"
+              className="w-full px-3.5 py-2.5 text-sm font-mono-num bg-[#FAFAF8] border border-[#DEDCD3] rounded-xl focus:outline-none focus:border-[#15803D]"
+            />
           </div>
 
           <div>

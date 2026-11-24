@@ -731,6 +731,7 @@ export function createApiApp(): express.Express {
           storeName,
           tagline: sanitizeString(b.tagline, 160),
           phone: sanitizeString(b.phone, 32),
+          whatsapp: sanitizeString(b.whatsapp, 32),
           address: sanitizeString(b.address, 200),
           workingHours: sanitizeString(b.workingHours, 100),
           currency: sanitizeString(b.currency, 12) || 'ج.م',

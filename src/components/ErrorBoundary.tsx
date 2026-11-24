@@ -23,7 +23,7 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error) {
-    console.error('Frescanto ErrorBoundary caught:', error);
+    console.error('Firstcanto ErrorBoundary caught:', error);
   }
 
   render() {
