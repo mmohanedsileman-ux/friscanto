@@ -19,7 +19,11 @@ import {
   type MenuItem,
   type StoreSettings,
 } from '../types';
-import { CATEGORY_DEFAULT_IMAGE, FRESCANTO_IMAGES } from '../data/defaultMenu';
+import {
+  CATEGORY_DEFAULT_IMAGE,
+  FRESCANTO_IMAGES,
+  resolveItemImage,
+} from '../data/defaultMenu';
 import { SafeImage } from './SafeImage';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -90,13 +94,12 @@ export function CustomerMenuView({
     return `https://wa.me/${whatsappNumber}?text=${text}`;
   }, [whatsappNumber, storeName]);
 
-  const availableItems = useMemo(
-    () =>
-      items
-        .filter((item) => item.isAvailable)
-        .sort((a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999)),
-    [items]
-  );
+  const availableItems = useMemo(() => {
+    const safeItems = Array.isArray(items) ? items : [];
+    return safeItems
+      .filter((item) => item && item.isAvailable)
+      .sort((a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999));
+  }, [items]);
 
   const categoriesWithItems = useMemo(() => {
     const present = new Set(availableItems.map((i) => i.category));
@@ -515,7 +518,12 @@ export function CustomerMenuView({
                   >
                     <div className="relative aspect-[4/3] w-full overflow-hidden bg-[#F3F2EC]">
                       <SafeImage
-                        src={item.imageUrl || CATEGORY_DEFAULT_IMAGE[item.category]}
+                        src={resolveItemImage(
+                          item.id,
+                          item.name,
+                          item.category,
+                          item.imageUrl || CATEGORY_DEFAULT_IMAGE[item.category]
+                        )}
                         alt={item.name}
                         fallbackLabel={item.name}
                         className="w-full h-full object-cover group-hover:scale-[1.03] smooth-settle"
@@ -647,7 +655,12 @@ export function CustomerMenuView({
           >
             <div className="relative aspect-[4/3] bg-[#F3F2EC]">
               <SafeImage
-                src={selectedItem.imageUrl || CATEGORY_DEFAULT_IMAGE[selectedItem.category]}
+                src={resolveItemImage(
+                  selectedItem.id,
+                  selectedItem.name,
+                  selectedItem.category,
+                  selectedItem.imageUrl || CATEGORY_DEFAULT_IMAGE[selectedItem.category]
+                )}
                 alt={selectedItem.name}
                 fallbackLabel={selectedItem.name}
                 className="w-full h-full object-cover"

@@ -58,10 +58,15 @@ function FirstcantoApp() {
 
     try {
       const data = await fetchPublicBootstrap();
+      if (!data || !Array.isArray(data.menuItems)) {
+        throw new Error('Invalid public bootstrap response');
+      }
       setPublicMenuItems(data.menuItems);
       setStoreSettings({
         ...DEFAULT_STORE_SETTINGS,
-        ...data.storeSettings,
+        ...(data.storeSettings && typeof data.storeSettings === 'object'
+          ? data.storeSettings
+          : {}),
       });
       loadedFromServerRef.current = true;
       setLoadedFromServer(true);

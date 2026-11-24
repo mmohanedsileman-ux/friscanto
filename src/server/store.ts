@@ -9,7 +9,11 @@ import type {
   Order,
   StoreSettings,
 } from '../types.ts';
-import { DEFAULT_MENU_ITEMS, DEFAULT_STORE_SETTINGS } from '../data/defaultMenu.ts';
+import {
+  DEFAULT_MENU_ITEMS,
+  DEFAULT_STORE_SETTINGS,
+  resolveItemImage,
+} from '../data/defaultMenu.ts';
 
 export interface AdminCredentialRecord {
   salt: string;
@@ -111,7 +115,12 @@ function normalizeDb(raw: Partial<PersistedDatabase> | null | undefined): Persis
 
   return {
     menuSeeded: typeof raw.menuSeeded === 'boolean' ? raw.menuSeeded : true,
-    menuItems: Array.isArray(raw.menuItems) ? raw.menuItems : base.menuItems,
+    menuItems: Array.isArray(raw.menuItems)
+      ? raw.menuItems.map((item) => ({
+          ...item,
+          imageUrl: resolveItemImage(item.id, item.name, item.category, item.imageUrl),
+        }))
+      : base.menuItems,
     orders: Array.isArray(raw.orders) ? raw.orders : [],
     expenses: Array.isArray(raw.expenses) ? raw.expenses : [],
     dailyClosings: Array.isArray(raw.dailyClosings) ? raw.dailyClosings : [],
