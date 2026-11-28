@@ -2,7 +2,7 @@ import type { MenuCategory, MenuItem, StoreSettings } from '../types.ts';
 
 export const FRESCANTO_IMAGES = {
   logo: '/src/assets/images/brand_firstcanto_logo_1795463576032.jpg',
-  hero: '/src/assets/images/hero_frescanto_bar_1795463021773.jpg',
+  hero: '/src/assets/images/hero_firstcanto_banner.jpg',
   mangoCubes: '/src/assets/images/item_mango_cubes_1795463575020.jpg',
   frescantoSalad: '/src/assets/images/item_frescanto_salad_1795463574929.jpg',
   romanengo: '/src/assets/images/item_romanengo_cup_1795463575765.jpg',

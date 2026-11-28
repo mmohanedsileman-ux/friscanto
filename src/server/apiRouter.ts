@@ -1,25 +1,22 @@
 import crypto from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import {
-  CATEGORY_ORDER,
   type DailyClosing,
   type Expense,
-  type ExpenseCategory,
   type MenuCategory,
   type MenuItem,
   type MonthlyClosing,
   type Order,
   type OrderItem,
-  type OrderStatus,
-  type OrderType,
-  type PaymentMethod,
-  type PaymentSource,
 } from '../types.ts';
 import { CATEGORY_DEFAULT_IMAGE, DEFAULT_MENU_ITEMS } from '../data/defaultMenu.ts';
 import {
+  auditLog,
   checkLoginRateLimit,
   clearFailedLogins,
+  createRateLimitMiddleware,
   createSessionToken,
+  delayFailedAuth,
   extractBearerToken,
   getClientKey,
   getCurrentCredentialVersion,
@@ -27,28 +24,45 @@ import {
   hashPassword,
   recordFailedLogin,
   requireAdmin,
+  revokeSessionToken,
   verifyAdminPassword,
   verifySessionToken,
 } from './auth.ts';
-import { getStorageMode, loadDatabase, saveDatabase, withDbLock } from './store.ts';
+import {
+  deleteUploadedImage,
+  getStorageMode,
+  loadDatabase,
+  loadUploadedImage,
+  saveDatabase,
+  saveUploadedImage,
+  UPLOAD_IMAGE_ID_RE,
+  UPLOAD_IMAGE_URL_PREFIX,
+  withDbLock,
+  type AllowedImageMime,
+} from './store.ts';
+import {
+  changePasswordSchema,
+  createExpenseSchema,
+  createMenuItemSchema,
+  createOrderSchema,
+  dailyClosingSchema,
+  formatZodError,
+  monthlyClosingSchema,
+  passwordOnlySchema,
+  setupPasswordSchema,
+  updateMenuItemSchema,
+  updateOrderStatusSchema,
+  updateStoreSettingsSchema,
+  uploadImageSchema,
+} from './validation.ts';
 
 const SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
 
-const VALID_CATEGORIES = new Set<string>(CATEGORY_ORDER);
-const VALID_ORDER_TYPES = new Set<string>(['dine_in', 'takeaway', 'delivery']);
-const VALID_PAYMENT_METHODS = new Set<string>(['cash', 'instapay', 'card']);
-const VALID_ORDER_STATUSES = new Set<string>(['preparing', 'completed', 'cancelled']);
-const VALID_EXPENSE_CATEGORIES = new Set<string>([
-  'fruits',
-  'packaging',
-  'utilities',
-  'salaries',
-  'rent',
-  'other',
-]);
-const VALID_PAYMENT_SOURCES = new Set<string>(['cash_drawer', 'bank_transfer']);
+// Max decoded image upload size: 1MB (client compresses under 450KB by default)
+const MAX_UPLOAD_IMAGE_BYTES = 1024 * 1024;
+const IMAGE_DATA_URL_RE = /^data:(image\/(?:jpeg|webp|png));base64,([A-Za-z0-9+/=]+)$/;
 
 function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
@@ -58,44 +72,220 @@ function asyncHandler(
   };
 }
 
-function sanitizeString(val: unknown, maxLen: number): string {
-  if (typeof val !== 'string') return '';
-  return val.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, maxLen);
+function hasValidImageMagicBytes(mimeType: AllowedImageMime, buf: Buffer): boolean {
+  if (buf.length < 12) return false;
+  if (mimeType === 'image/jpeg') {
+    return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  }
+  if (mimeType === 'image/png') {
+    return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  }
+  if (mimeType === 'image/webp') {
+    return (
+      buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buf.subarray(8, 12).toString('ascii') === 'WEBP'
+    );
+  }
+  return false;
 }
 
-function sanitizeImageUrl(val: unknown, fallbackCategory: MenuCategory): string {
-  const s = sanitizeString(val, 500);
+function parseAndValidateImageDataUrl(
+  raw: string
+): { mimeType: AllowedImageMime; buffer: Buffer } | { error: string } {
+  const trimmed = raw.trim();
+  const match = IMAGE_DATA_URL_RE.exec(trimmed);
+  if (!match) {
+    return { error: 'صيغة الصورة غير مدعومة. الصيغ المدعومة هي JPG و PNG و WebP فقط.' };
+  }
+  const mimeType = match[1] as AllowedImageMime;
+  const buffer = Buffer.from(match[2], 'base64');
+  if (buffer.length === 0 || buffer.length > MAX_UPLOAD_IMAGE_BYTES) {
+    return { error: 'حجم الصورة يتجاوز الحد الأقصى المسموح به (1 ميجابايت).' };
+  }
+  if (!hasValidImageMagicBytes(mimeType, buffer)) {
+    return { error: 'محتوى الملف لا يطابق صورة سليمة.' };
+  }
+  return { mimeType, buffer };
+}
+
+function sanitizeImageUrl(val: string | undefined, fallbackCategory: MenuCategory): string {
+  const s = (val || '').trim();
   if (!s) return CATEGORY_DEFAULT_IMAGE[fallbackCategory];
   if (s.startsWith('/src/assets/')) return s;
+  if (s.startsWith(UPLOAD_IMAGE_URL_PREFIX)) {
+    const id = s.slice(UPLOAD_IMAGE_URL_PREFIX.length);
+    if (UPLOAD_IMAGE_ID_RE.test(id)) {
+      return s;
+    }
+    return CATEGORY_DEFAULT_IMAGE[fallbackCategory];
+  }
   try {
     const parsed = new URL(s);
-    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+    if (parsed.protocol === 'https:') {
       return parsed.toString();
     }
   } catch {
-    // Reject javascript: / data: / malformed URLs
+    // Reject javascript: / data: / http: / malformed URLs
   }
   return CATEGORY_DEFAULT_IMAGE[fallbackCategory];
 }
 
-function sanitizeNumber(val: unknown, min: number, max: number, fallback = 0): number {
-  const n = Number(val);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Number(n.toFixed(2))));
+function getAllowedOrigins(): Set<string> {
+  const allowed = new Set<string>();
+  const raw = [process.env.ALLOWED_ORIGINS, process.env.APP_URL]
+    .filter(Boolean)
+    .join(',');
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim().replace(/\/+$/, '');
+    if (!trimmed) continue;
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        allowed.add(parsed.origin);
+      }
+    } catch {
+      // Ignore malformed env entries
+    }
+  }
+  return allowed;
+}
+
+function isTrustedOrigin(req: Request, originHeader: string): boolean {
+  let originUrl: URL;
+  try {
+    originUrl = new URL(originHeader);
+  } catch {
+    return false;
+  }
+  if (originUrl.protocol !== 'https:' && originUrl.protocol !== 'http:') {
+    return false;
+  }
+
+  const forwardedHost =
+    (typeof req.headers['x-forwarded-host'] === 'string'
+      ? req.headers['x-forwarded-host'].split(',')[0].trim()
+      : '') || req.headers.host || '';
+  if (forwardedHost && originUrl.host.toLowerCase() === forwardedHost.toLowerCase()) {
+    return true;
+  }
+
+  return getAllowedOrigins().has(originUrl.origin);
+}
+
+function toPublicMenuItem(item: MenuItem) {
+  return {
+    id: item.id,
+    name: item.name,
+    nameEn: item.nameEn || '',
+    category: item.category,
+    description: item.description,
+    price: item.price,
+    size: item.size,
+    imageUrl: item.imageUrl,
+    isAvailable: item.isAvailable,
+    isFeatured: item.isFeatured,
+    sortOrder: item.sortOrder,
+  };
+}
+
+function toPublicStoreSettings(s: {
+  storeName: string;
+  tagline: string;
+  phone: string;
+  whatsapp?: string;
+  address: string;
+  workingHours: string;
+  currency: string;
+  isPublic: boolean;
+}) {
+  return {
+    storeName: s.storeName,
+    tagline: s.tagline,
+    phone: s.phone,
+    whatsapp: s.whatsapp || '',
+    address: s.address,
+    workingHours: s.workingHours,
+    currency: s.currency,
+    isPublic: s.isPublic,
+  };
 }
 
 export function createApiApp(): express.Express {
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '512kb' }));
+  app.use(express.json({ limit: '1536kb' }));
 
-  // Protective security headers across all responses (no X-Frame-Options to preserve iframe compatibility)
+  // Protective security headers across all responses
+  // Note: X-Frame-Options: DENY + CSP frame-ancestors 'none' are enforced on Vercel via vercel.json
   app.use((_req, res, next) => {
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
     next();
   });
+
+  // Strict CORS: never emit wildcard "*" on API routes; block untrusted cross-origin mutations
+  app.use('/api', (req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (isTrustedOrigin(req, origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      } else {
+        if (req.method === 'OPTIONS') {
+          res.status(403).end();
+          return;
+        }
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          auditLog('cors_blocked', req, { origin });
+          res.status(403).json({ error: 'مصدر الطلب غير مصرح به.' });
+          return;
+        }
+      }
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  // General API rate limit: 100 requests / minute per IP
+  app.use(
+    '/api',
+    createRateLimitMiddleware(
+      'general',
+      100,
+      60 * 1000,
+      'تم تجاوز الحد المسموح من الطلبات مؤقتاً.'
+    )
+  );
+
+  // Stricter write rate limit on admin mutations: 30 write requests / minute per IP
+  const adminWriteRateLimit = createRateLimitMiddleware(
+    'write',
+    30,
+    60 * 1000,
+    'تم إرسال عدد كبير من عمليات التعديل.'
+  );
+  app.use('/api/admin', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+      next();
+      return;
+    }
+    adminWriteRateLimit(req, res, next);
+  });
+
+  // Stricter upload rate limit: 15 uploads / 10 minutes per IP
+  const uploadRateLimit = createRateLimitMiddleware(
+    'upload',
+    15,
+    10 * 60 * 1000,
+    'تم تجاوز الحد المسموح لرفع الصور مؤقتاً.'
+  );
 
   // Never cache authentication or private admin/financial data in browser, proxy, or service worker
   app.use(['/api/auth', '/api/admin'], (_req, res, next) => {
@@ -104,20 +294,41 @@ export function createApiApp(): express.Express {
     next();
   });
 
-  // Public Storefront Bootstrap (only available items & public settings — never exposes credentials or orders)
+  // Public Storefront Bootstrap (strictly read-only & stripped of internal metadata)
   app.get(
     '/api/public/bootstrap',
     asyncHandler(async (_req: Request, res: Response) => {
       const db = await loadDatabase();
       res.setHeader('Cache-Control', 'no-cache');
       res.json({
-        menuItems: db.menuItems.filter((item) => item.isAvailable),
-        storeSettings: db.storeSettings,
+        menuItems: db.menuItems.filter((item) => item.isAvailable).map(toPublicMenuItem),
+        storeSettings: toPublicStoreSettings(db.storeSettings),
       });
     })
   );
 
-  // Auth Status
+  // Serve Uploaded Menu Item Images (immutable, sandboxed binary response — never executed as HTML)
+  app.get(
+    '/api/public/images/:id',
+    asyncHandler(async (req: Request, res: Response) => {
+      const id = String(req.params.id || '');
+      if (!UPLOAD_IMAGE_ID_RE.test(id)) {
+        res.status(400).end();
+        return;
+      }
+      const record = await loadUploadedImage(id);
+      if (!record) {
+        res.status(404).end();
+        return;
+      }
+      res.setHeader('Content-Type', record.mimeType);
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.send(record.buffer);
+    })
+  );
+
+  // Auth Status (never leaks secrets or passwords)
   app.get(
     '/api/auth/status',
     asyncHandler(async (req: Request, res: Response) => {
@@ -141,6 +352,8 @@ export function createApiApp(): express.Express {
       const clientKey = getClientKey(req);
       const limit = checkLoginRateLimit(clientKey);
       if (!limit.allowed) {
+        auditLog('auth_setup_rate_limited', req);
+        res.setHeader('Retry-After', String(limit.retryAfterSeconds));
         res.status(429).json({
           error: `تم إيقاف المحاولات مؤقتاً لحماية النظام. حاول بعد ${limit.retryAfterSeconds} ثانية.`,
         });
@@ -155,12 +368,11 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const password = typeof req.body?.password === 'string' ? req.body.password : '';
-      if (password.length < 4 || password.length > 128) {
+      const parsed = setupPasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
         recordFailedLogin(clientKey);
-        res.status(400).json({
-          error: 'يجب أن تتكون كلمة السر من 4 أحرف أو أرقام على الأقل.',
-        });
+        await delayFailedAuth();
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
 
@@ -169,7 +381,7 @@ export function createApiApp(): express.Express {
         if (db.adminCredential) {
           return { alreadyClaimed: true as const };
         }
-        db.adminCredential = hashPassword(password);
+        db.adminCredential = hashPassword(parsed.data.password);
         await saveDatabase(db);
         const version = await getCurrentCredentialVersion();
         const token = await createSessionToken(version);
@@ -184,17 +396,20 @@ export function createApiApp(): express.Express {
       }
 
       clearFailedLogins(clientKey);
+      auditLog('auth_setup_completed', req);
       res.status(201).json({ token: result.token, managedByEnv: false });
     })
   );
 
-  // Admin Password Login
+  // Admin Password Login (5 attempts / 15 min per IP + delay + generic error message)
   app.post(
     '/api/auth/login',
     asyncHandler(async (req: Request, res: Response) => {
       const clientKey = getClientKey(req);
       const limit = checkLoginRateLimit(clientKey);
       if (!limit.allowed) {
+        auditLog('auth_login_rate_limited', req);
+        res.setHeader('Retry-After', String(limit.retryAfterSeconds));
         res.status(429).json({
           error: `تم إيقاف المحاولات مؤقتاً لحماية النظام. حاول بعد ${limit.retryAfterSeconds} ثانية.`,
         });
@@ -210,24 +425,41 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const password = typeof req.body?.password === 'string' ? req.body.password : '';
-      if (!password || password.length > 128) {
+      const parsed = passwordOnlySchema.safeParse(req.body);
+      if (!parsed.success) {
         recordFailedLogin(clientKey);
-        res.status(400).json({ error: 'يرجى إدخال كلمة السر.' });
+        auditLog('auth_login_failed', req, { reason: 'invalid_payload' });
+        await delayFailedAuth();
+        res.status(401).json({ error: 'بيانات الدخول غير صحيحة.' });
         return;
       }
 
-      const ok = await verifyAdminPassword(password);
+      const ok = await verifyAdminPassword(parsed.data.password);
       if (!ok) {
         recordFailedLogin(clientKey);
-        res.status(401).json({ error: 'كلمة السر غير صحيحة.' });
+        auditLog('auth_login_failed', req, { reason: 'bad_credentials' });
+        await delayFailedAuth();
+        res.status(401).json({ error: 'بيانات الدخول غير صحيحة.' });
         return;
       }
 
       clearFailedLogins(clientKey);
       const version = await getCurrentCredentialVersion();
       const token = await createSessionToken(version);
+      auditLog('auth_login_succeeded', req);
       res.json({ token, managedByEnv: Boolean(envPass) });
+    })
+  );
+
+  // Admin Logout (revokes active JWT server-side so it cannot be reused)
+  app.post(
+    '/api/auth/logout',
+    requireAdmin,
+    asyncHandler(async (req: Request, res: Response) => {
+      const token = extractBearerToken(req);
+      await revokeSessionToken(token);
+      auditLog('auth_logout', req);
+      res.json({ ok: true });
     })
   );
 
@@ -239,6 +471,7 @@ export function createApiApp(): express.Express {
       const clientKey = getClientKey(req);
       const limit = checkLoginRateLimit(clientKey);
       if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSeconds));
         res.status(429).json({
           error: `تم إيقاف المحاولات مؤقتاً لحماية النظام. حاول بعد ${limit.retryAfterSeconds} ثانية.`,
         });
@@ -253,33 +486,30 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const currentPassword =
-        typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
-      const newPassword =
-        typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
-
-      if (newPassword.length < 4 || newPassword.length > 128) {
-        res.status(400).json({
-          error: 'يجب أن تتكون كلمة السر الجديدة من 4 أحرف أو أرقام على الأقل.',
-        });
+      const parsed = changePasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
 
-      const validCurrent = await verifyAdminPassword(currentPassword);
+      const validCurrent = await verifyAdminPassword(parsed.data.currentPassword);
       if (!validCurrent) {
         recordFailedLogin(clientKey);
-        res.status(401).json({ error: 'كلمة السر الحالية غير صحيحة.' });
+        auditLog('auth_change_password_failed', req);
+        await delayFailedAuth();
+        res.status(401).json({ error: 'بيانات الدخول غير صحيحة.' });
         return;
       }
 
       clearFailedLogins(clientKey);
       const token = await withDbLock(async () => {
         const db = await loadDatabase();
-        db.adminCredential = hashPassword(newPassword);
+        db.adminCredential = hashPassword(parsed.data.newPassword);
         await saveDatabase(db);
         const version = await getCurrentCredentialVersion();
         return createSessionToken(version);
       });
+      auditLog('auth_password_changed', req);
       res.json({ token });
     })
   );
@@ -303,86 +533,86 @@ export function createApiApp(): express.Express {
     })
   );
 
-  // Create Order
+  // Create Order (Server-authoritative pricing: looks up prices from catalog, never trusts client prices)
   app.post(
     '/api/admin/orders',
     requireAdmin,
     asyncHandler(async (req: Request, res: Response) => {
-      const body = req.body ?? {};
-      const dateKey = sanitizeString(body.dateKey, 10);
-      const monthKey = sanitizeString(body.monthKey, 7);
-      const orderType = sanitizeString(body.orderType, 20) as OrderType;
-      const paymentMethod = sanitizeString(body.paymentMethod, 20) as PaymentMethod;
-      const rawItems = Array.isArray(body.items) ? body.items : [];
-
-      if (!DATE_KEY_RE.test(dateKey) || !MONTH_KEY_RE.test(monthKey)) {
-        res.status(400).json({ error: 'تاريخ الأوردر غير صالح.' });
-        return;
-      }
-      if (!VALID_ORDER_TYPES.has(orderType) || !VALID_PAYMENT_METHODS.has(paymentMethod)) {
-        res.status(400).json({ error: 'نوع الطلب أو طريقة الدفع غير صالحة.' });
-        return;
-      }
-      if (rawItems.length < 1 || rawItems.length > 30) {
-        res.status(400).json({ error: 'يجب أن يحتوي الأوردر على صنف واحد على الأقل.' });
+      const parsed = createOrderSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
 
-      const items: OrderItem[] = [];
-      for (const raw of rawItems) {
-        const cat = sanitizeString(raw?.category, 30);
-        if (!VALID_CATEGORIES.has(cat)) {
-          res.status(400).json({ error: 'قسم أحد الأصناف غير صالح.' });
-          return;
-        }
-        const unitPrice = sanitizeNumber(raw?.unitPrice, 0, 100000);
-        const quantity = Math.round(sanitizeNumber(raw?.quantity, 1, 200, 1));
-        items.push({
-          itemId: sanitizeString(raw?.itemId, 128).replace(/[^a-zA-Z0-9_-]/g, '_') || 'item',
-          name: sanitizeString(raw?.name, 100) || 'صنف',
-          category: cat as MenuCategory,
-          unitPrice,
-          quantity,
-          lineTotal: Number((unitPrice * quantity).toFixed(2)),
-        });
-      }
+      const data = parsed.data;
 
-      const subtotal = Number(items.reduce((s, i) => s + i.lineTotal, 0).toFixed(2));
-      const discount = sanitizeNumber(body.discount, 0, subtotal);
-      const total = Number(Math.max(0, subtotal - discount).toFixed(2));
-      const itemCount = items.reduce((s, i) => s + i.quantity, 0);
-
-      const newOrder = await withDbLock(async () => {
+      const result = await withDbLock(async () => {
         const db = await loadDatabase();
-        const sameDayCount = db.orders.filter((o) => o.dateKey === dateKey).length;
+        const catalog = db.menuItems.length > 0 ? db.menuItems : DEFAULT_MENU_ITEMS;
+        const catalogMap = new Map(catalog.map((m) => [m.id, m]));
+
+        const items: OrderItem[] = [];
+        for (const reqItem of data.items) {
+          const catalogItem = catalogMap.get(reqItem.itemId);
+          if (!catalogItem) {
+            return { error: 'أحد الأصناف المختارة غير موجود في قائمة المنيو.' as const };
+          }
+          const unitPrice = Number(catalogItem.price.toFixed(2));
+          const quantity = reqItem.quantity;
+          items.push({
+            itemId: catalogItem.id,
+            name: catalogItem.name,
+            category: catalogItem.category,
+            unitPrice,
+            quantity,
+            lineTotal: Number((unitPrice * quantity).toFixed(2)),
+          });
+        }
+
+        const subtotal = Number(items.reduce((s, i) => s + i.lineTotal, 0).toFixed(2));
+        const discount = Number(Math.min(subtotal, Math.max(0, data.discount)).toFixed(2));
+        const total = Number(Math.max(0, subtotal - discount).toFixed(2));
+        const itemCount = items.reduce((s, i) => s + i.quantity, 0);
+
+        const sameDayCount = db.orders.filter((o) => o.dateKey === data.dateKey).length;
         const seq = String(sameDayCount + 1).padStart(3, '0');
-        const orderNumber = `FC-${dateKey.slice(5).replace('-', '')}-${seq}`;
+        const orderNumber = `FC-${data.dateKey.slice(5).replace('-', '')}-${seq}`;
 
         const order: Order = {
           id: `ord_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
           orderNumber,
-          dateKey,
-          monthKey,
-          orderType,
-          paymentMethod,
+          dateKey: data.dateKey,
+          monthKey: data.monthKey,
+          orderType: data.orderType,
+          paymentMethod: data.paymentMethod,
           status: 'completed',
           items,
           itemCount,
           subtotal,
           discount,
           total,
-          customerName: sanitizeString(body.customerName, 100),
-          notes: sanitizeString(body.notes, 300),
+          customerName: data.customerName,
+          notes: data.notes,
           createdBy: 'admin',
           createdAtIso: new Date().toISOString(),
         };
 
         db.orders.unshift(order);
         await saveDatabase(db);
-        return order;
+        return { order };
       });
 
-      res.status(201).json({ order: newOrder });
+      if ('error' in result) {
+        res.status(400).json({ error: result.error });
+        return;
+      }
+
+      auditLog('order_created', req, {
+        orderId: result.order.id,
+        orderNumber: result.order.orderNumber,
+        total: result.order.total,
+      });
+      res.status(201).json({ order: result.order });
     })
   );
 
@@ -396,9 +626,10 @@ export function createApiApp(): express.Express {
         res.status(400).json({ error: 'معرّف الأوردر غير صالح.' });
         return;
       }
-      const status = sanitizeString(req.body?.status, 20) as OrderStatus;
-      if (!VALID_ORDER_STATUSES.has(status)) {
-        res.status(400).json({ error: 'حالة الأوردر غير صالحة.' });
+
+      const parsed = updateOrderStatusSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
 
@@ -406,7 +637,7 @@ export function createApiApp(): express.Express {
         const db = await loadDatabase();
         const idx = db.orders.findIndex((o) => o.id === id);
         if (idx === -1) return null;
-        db.orders[idx] = { ...db.orders[idx], status };
+        db.orders[idx] = { ...db.orders[idx], status: parsed.data.status };
         await saveDatabase(db);
         return db.orders[idx];
       });
@@ -415,6 +646,7 @@ export function createApiApp(): express.Express {
         res.status(404).json({ error: 'الأوردر غير موجود.' });
         return;
       }
+      auditLog('order_status_updated', req, { orderId: id, status: parsed.data.status });
       res.json({ order: updated });
     })
   );
@@ -424,38 +656,24 @@ export function createApiApp(): express.Express {
     '/api/admin/expenses',
     requireAdmin,
     asyncHandler(async (req: Request, res: Response) => {
-      const body = req.body ?? {};
-      const dateKey = sanitizeString(body.dateKey, 10);
-      const monthKey = sanitizeString(body.monthKey, 7);
-      const title = sanitizeString(body.title, 120);
-      const category = sanitizeString(body.category, 30) as ExpenseCategory;
-      const paymentSource = sanitizeString(body.paymentSource, 30) as PaymentSource;
-      const amount = sanitizeNumber(body.amount, 0.01, 1000000, 0);
-
-      if (!DATE_KEY_RE.test(dateKey) || !MONTH_KEY_RE.test(monthKey)) {
-        res.status(400).json({ error: 'تاريخ المصروف غير صالح.' });
-        return;
-      }
-      if (!title || amount <= 0) {
-        res.status(400).json({ error: 'يرجى إدخال بيان ومبلغ المصروف بشكل صحيح.' });
-        return;
-      }
-      if (!VALID_EXPENSE_CATEGORIES.has(category) || !VALID_PAYMENT_SOURCES.has(paymentSource)) {
-        res.status(400).json({ error: 'تصنيف المصروف أو مصدر الدفع غير صالح.' });
+      const parsed = createExpenseSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
 
+      const d = parsed.data;
       const expense = await withDbLock(async () => {
         const db = await loadDatabase();
         const item: Expense = {
           id: `exp_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
-          dateKey,
-          monthKey,
-          title,
-          category,
-          amount,
-          paymentSource,
-          notes: sanitizeString(body.notes, 300),
+          dateKey: d.dateKey,
+          monthKey: d.monthKey,
+          title: d.title,
+          category: d.category,
+          amount: Number(d.amount.toFixed(2)),
+          paymentSource: d.paymentSource,
+          notes: d.notes,
           createdBy: 'admin',
           createdAtIso: new Date().toISOString(),
         };
@@ -463,6 +681,7 @@ export function createApiApp(): express.Express {
         await saveDatabase(db);
         return item;
       });
+      auditLog('expense_created', req, { expenseId: expense.id, amount: expense.amount });
       res.status(201).json({ expense });
     })
   );
@@ -482,6 +701,7 @@ export function createApiApp(): express.Express {
         db.expenses = db.expenses.filter((e) => e.id !== id);
         await saveDatabase(db);
       });
+      auditLog('expense_deleted', req, { expenseId: id });
       res.json({ ok: true });
     })
   );
@@ -496,27 +716,32 @@ export function createApiApp(): express.Express {
         res.status(400).json({ error: 'تاريخ التقفيل غير صالح.' });
         return;
       }
-      const b = req.body ?? {};
+      const parsed = dailyClosingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
+        return;
+      }
+      const b = parsed.data;
       const closing: DailyClosing = {
         id: dateKey,
         dateKey,
         monthKey: dateKey.slice(0, 7),
-        ordersCount: Math.round(sanitizeNumber(b.ordersCount, 0, 100000)),
-        cancelledCount: Math.round(sanitizeNumber(b.cancelledCount, 0, 100000)),
-        grossSales: sanitizeNumber(b.grossSales, 0, 10000000),
-        totalDiscounts: sanitizeNumber(b.totalDiscounts, 0, 10000000),
-        netSales: sanitizeNumber(b.netSales, 0, 10000000),
-        cashSales: sanitizeNumber(b.cashSales, 0, 10000000),
-        instapaySales: sanitizeNumber(b.instapaySales, 0, 10000000),
-        cardSales: sanitizeNumber(b.cardSales, 0, 10000000),
-        totalExpenses: sanitizeNumber(b.totalExpenses, 0, 10000000),
-        cashExpenses: sanitizeNumber(b.cashExpenses, 0, 10000000),
-        openingCash: sanitizeNumber(b.openingCash, 0, 10000000),
-        expectedCash: sanitizeNumber(b.expectedCash, -10000000, 10000000),
-        actualCash: sanitizeNumber(b.actualCash, 0, 10000000),
-        cashVariance: sanitizeNumber(b.cashVariance, -10000000, 10000000),
-        netProfit: sanitizeNumber(b.netProfit, -10000000, 10000000),
-        notes: sanitizeString(b.notes, 400),
+        ordersCount: b.ordersCount,
+        cancelledCount: b.cancelledCount,
+        grossSales: Number(b.grossSales.toFixed(2)),
+        totalDiscounts: Number(b.totalDiscounts.toFixed(2)),
+        netSales: Number(b.netSales.toFixed(2)),
+        cashSales: Number(b.cashSales.toFixed(2)),
+        instapaySales: Number(b.instapaySales.toFixed(2)),
+        cardSales: Number(b.cardSales.toFixed(2)),
+        totalExpenses: Number(b.totalExpenses.toFixed(2)),
+        cashExpenses: Number(b.cashExpenses.toFixed(2)),
+        openingCash: Number(b.openingCash.toFixed(2)),
+        expectedCash: Number(b.expectedCash.toFixed(2)),
+        actualCash: Number(b.actualCash.toFixed(2)),
+        cashVariance: Number(b.cashVariance.toFixed(2)),
+        netProfit: Number(b.netProfit.toFixed(2)),
+        notes: b.notes,
         status: 'closed',
         closedBy: 'admin',
         closedByEmail: 'admin',
@@ -529,6 +754,7 @@ export function createApiApp(): express.Express {
         else db.dailyClosings[idx] = closing;
         await saveDatabase(db);
       });
+      auditLog('daily_closing_saved', req, { dateKey, netProfit: closing.netProfit });
       res.json({ dailyClosing: closing });
     })
   );
@@ -543,22 +769,27 @@ export function createApiApp(): express.Express {
         res.status(400).json({ error: 'الشهر غير صالح.' });
         return;
       }
-      const b = req.body ?? {};
+      const parsed = monthlyClosingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
+        return;
+      }
+      const b = parsed.data;
       const closing: MonthlyClosing = {
         id: monthKey,
         monthKey,
-        daysClosedCount: Math.round(sanitizeNumber(b.daysClosedCount, 0, 31)),
-        ordersCount: Math.round(sanitizeNumber(b.ordersCount, 0, 1000000)),
-        netSales: sanitizeNumber(b.netSales, 0, 100000000),
-        cashSales: sanitizeNumber(b.cashSales, 0, 100000000),
-        instapaySales: sanitizeNumber(b.instapaySales, 0, 100000000),
-        cardSales: sanitizeNumber(b.cardSales, 0, 100000000),
-        totalExpenses: sanitizeNumber(b.totalExpenses, 0, 100000000),
-        fixedExpenses: sanitizeNumber(b.fixedExpenses, 0, 100000000),
-        netProfit: sanitizeNumber(b.netProfit, -100000000, 100000000),
-        topProductName: sanitizeString(b.topProductName, 120),
-        topProductQty: Math.round(sanitizeNumber(b.topProductQty, 0, 1000000)),
-        notes: sanitizeString(b.notes, 500),
+        daysClosedCount: b.daysClosedCount,
+        ordersCount: b.ordersCount,
+        netSales: Number(b.netSales.toFixed(2)),
+        cashSales: Number(b.cashSales.toFixed(2)),
+        instapaySales: Number(b.instapaySales.toFixed(2)),
+        cardSales: Number(b.cardSales.toFixed(2)),
+        totalExpenses: Number(b.totalExpenses.toFixed(2)),
+        fixedExpenses: Number(b.fixedExpenses.toFixed(2)),
+        netProfit: Number(b.netProfit.toFixed(2)),
+        topProductName: b.topProductName,
+        topProductQty: b.topProductQty,
+        notes: b.notes,
         status: 'closed',
         closedBy: 'admin',
         closedByEmail: 'admin',
@@ -571,7 +802,35 @@ export function createApiApp(): express.Express {
         else db.monthlyClosings[idx] = closing;
         await saveDatabase(db);
       });
+      auditLog('monthly_closing_saved', req, { monthKey, netProfit: closing.netProfit });
       res.json({ monthlyClosing: closing });
+    })
+  );
+
+  // Upload Compressed Menu Item Image (Admin Only + Dedicated Rate Limit + Magic Bytes Verification)
+  app.post(
+    '/api/admin/uploads',
+    requireAdmin,
+    uploadRateLimit,
+    asyncHandler(async (req: Request, res: Response) => {
+      const schemaResult = uploadImageSchema.safeParse(req.body);
+      if (!schemaResult.success) {
+        res.status(400).json({ error: formatZodError(schemaResult.error) });
+        return;
+      }
+
+      const parsed = parseAndValidateImageDataUrl(schemaResult.data.dataUrl);
+      if ('error' in parsed) {
+        res.status(400).json({ error: parsed.error });
+        return;
+      }
+      const imageUrl = await saveUploadedImage(parsed.mimeType, parsed.buffer);
+      auditLog('image_uploaded', req, {
+        mimeType: parsed.mimeType,
+        sizeBytes: parsed.buffer.length,
+        imageUrl,
+      });
+      res.status(201).json({ imageUrl });
     })
   );
 
@@ -579,7 +838,7 @@ export function createApiApp(): express.Express {
   app.post(
     '/api/admin/menu/seed',
     requireAdmin,
-    asyncHandler(async (_req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const menuItems = await withDbLock(async () => {
         const db = await loadDatabase();
         db.menuItems = DEFAULT_MENU_ITEMS.map((item) => ({
@@ -590,6 +849,7 @@ export function createApiApp(): express.Express {
         await saveDatabase(db);
         return db.menuItems;
       });
+      auditLog('menu_seeded', req, { count: menuItems.length });
       res.json({ menuItems });
     })
   );
@@ -598,26 +858,25 @@ export function createApiApp(): express.Express {
     '/api/admin/menu',
     requireAdmin,
     asyncHandler(async (req: Request, res: Response) => {
-      const b = req.body ?? {};
-      const name = sanitizeString(b.name, 100);
-      const cat = sanitizeString(b.category, 30);
-      if (!name || !VALID_CATEGORIES.has(cat)) {
-        res.status(400).json({ error: 'يرجى إدخال اسم الصنف والقسم بشكل صحيح.' });
+      const parsed = createMenuItemSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
-      const category = cat as MenuCategory;
+
+      const b = parsed.data;
       const item: MenuItem = {
         id: `item_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
-        name,
-        nameEn: sanitizeString(b.nameEn, 100),
-        category,
-        description: sanitizeString(b.description, 300),
-        price: sanitizeNumber(b.price, 0, 100000),
-        size: sanitizeString(b.size, 40) || 'حجم قياسي',
-        imageUrl: sanitizeImageUrl(b.imageUrl, category),
-        isAvailable: b.isAvailable !== false,
-        isFeatured: Boolean(b.isFeatured),
-        sortOrder: Math.round(sanitizeNumber(b.sortOrder, 0, 10000, 10)),
+        name: b.name,
+        nameEn: b.nameEn,
+        category: b.category,
+        description: b.description,
+        price: Number(b.price.toFixed(2)),
+        size: b.size || 'حجم قياسي',
+        imageUrl: sanitizeImageUrl(b.imageUrl, b.category),
+        isAvailable: b.isAvailable,
+        isFeatured: b.isFeatured,
+        sortOrder: b.sortOrder,
         createdBy: 'admin',
       };
 
@@ -625,6 +884,11 @@ export function createApiApp(): express.Express {
         const db = await loadDatabase();
         db.menuItems.push(item);
         await saveDatabase(db);
+      });
+      auditLog('menu_item_created', req, {
+        itemId: item.id,
+        name: item.name,
+        price: item.price,
       });
       res.status(201).json({ item });
     })
@@ -640,59 +904,67 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const b = req.body ?? {};
+      const parsed = updateMenuItemSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
+        return;
+      }
+
+      const b = parsed.data;
       const updated = await withDbLock(async () => {
         const db = await loadDatabase();
         const idx = db.menuItems.findIndex((i) => i.id === id);
         if (idx === -1) return null;
 
         const existing = db.menuItems[idx];
-        const nextCategory =
-          typeof b.category === 'string' && VALID_CATEGORIES.has(b.category)
-            ? (b.category as MenuCategory)
-            : existing.category;
+        const nextCategory = b.category ?? existing.category;
 
         const nextItem: MenuItem = {
           ...existing,
-          name:
-            typeof b.name === 'string'
-              ? sanitizeString(b.name, 100) || existing.name
-              : existing.name,
-          nameEn: typeof b.nameEn === 'string' ? sanitizeString(b.nameEn, 100) : existing.nameEn,
+          name: b.name ?? existing.name,
+          nameEn: b.nameEn ?? existing.nameEn,
           category: nextCategory,
-          description:
-            typeof b.description === 'string'
-              ? sanitizeString(b.description, 300)
-              : existing.description,
-          price:
-            b.price !== undefined
-              ? sanitizeNumber(b.price, 0, 100000, existing.price)
-              : existing.price,
-          size: typeof b.size === 'string' ? sanitizeString(b.size, 40) : existing.size,
+          description: b.description ?? existing.description,
+          price: b.price !== undefined ? Number(b.price.toFixed(2)) : existing.price,
+          size: b.size ?? existing.size,
           imageUrl:
-            typeof b.imageUrl === 'string'
+            b.imageUrl !== undefined
               ? sanitizeImageUrl(b.imageUrl, nextCategory)
               : existing.imageUrl,
-          isAvailable:
-            typeof b.isAvailable === 'boolean' ? b.isAvailable : existing.isAvailable,
-          isFeatured:
-            typeof b.isFeatured === 'boolean' ? b.isFeatured : existing.isFeatured,
-          sortOrder:
-            b.sortOrder !== undefined
-              ? Math.round(sanitizeNumber(b.sortOrder, 0, 10000, existing.sortOrder))
-              : existing.sortOrder,
+          isAvailable: b.isAvailable ?? existing.isAvailable,
+          isFeatured: b.isFeatured ?? existing.isFeatured,
+          sortOrder: b.sortOrder ?? existing.sortOrder,
         };
 
         db.menuItems[idx] = nextItem;
         await saveDatabase(db);
-        return nextItem;
+        const replacedImageUrl =
+          existing.imageUrl !== nextItem.imageUrl &&
+          existing.imageUrl.startsWith(UPLOAD_IMAGE_URL_PREFIX) &&
+          !db.menuItems.some((i) => i.imageUrl === existing.imageUrl)
+            ? existing.imageUrl
+            : null;
+        return {
+          item: nextItem,
+          previousPrice: existing.price,
+          replacedImageUrl,
+        };
       });
 
       if (!updated) {
         res.status(404).json({ error: 'الصنف غير موجود.' });
         return;
       }
-      res.json({ item: updated });
+      if (updated.replacedImageUrl) {
+        void deleteUploadedImage(updated.replacedImageUrl);
+      }
+      auditLog('menu_item_updated', req, {
+        itemId: id,
+        name: updated.item.name,
+        previousPrice: updated.previousPrice,
+        newPrice: updated.item.price,
+      });
+      res.json({ item: updated.item });
     })
   );
 
@@ -705,11 +977,23 @@ export function createApiApp(): express.Express {
         res.status(400).json({ error: 'معرّف الصنف غير صالح.' });
         return;
       }
-      await withDbLock(async () => {
+      const deleted = await withDbLock(async () => {
         const db = await loadDatabase();
+        const removed = db.menuItems.find((i) => i.id === id);
         db.menuItems = db.menuItems.filter((i) => i.id !== id);
         await saveDatabase(db);
+        const orphanImageUrl =
+          removed &&
+          removed.imageUrl.startsWith(UPLOAD_IMAGE_URL_PREFIX) &&
+          !db.menuItems.some((i) => i.imageUrl === removed.imageUrl)
+            ? removed.imageUrl
+            : null;
+        return { name: removed?.name ?? null, orphanImageUrl };
       });
+      if (deleted.orphanImageUrl) {
+        void deleteUploadedImage(deleted.orphanImageUrl);
+      }
+      auditLog('menu_item_deleted', req, { itemId: id, name: deleted.name });
       res.json({ ok: true });
     })
   );
@@ -719,27 +1003,29 @@ export function createApiApp(): express.Express {
     '/api/admin/settings',
     requireAdmin,
     asyncHandler(async (req: Request, res: Response) => {
-      const b = req.body ?? {};
-      const storeName = sanitizeString(b.storeName, 80);
-      if (!storeName) {
-        res.status(400).json({ error: 'اسم المحل مطلوب.' });
+      const parsed = updateStoreSettingsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: formatZodError(parsed.error) });
         return;
       }
+
+      const b = parsed.data;
       const storeSettings = await withDbLock(async () => {
         const db = await loadDatabase();
         db.storeSettings = {
-          storeName,
-          tagline: sanitizeString(b.tagline, 160),
-          phone: sanitizeString(b.phone, 32),
-          whatsapp: sanitizeString(b.whatsapp, 32),
-          address: sanitizeString(b.address, 200),
-          workingHours: sanitizeString(b.workingHours, 100),
-          currency: sanitizeString(b.currency, 12) || 'ج.م',
+          storeName: b.storeName,
+          tagline: b.tagline,
+          phone: b.phone,
+          whatsapp: b.whatsapp,
+          address: b.address,
+          workingHours: b.workingHours,
+          currency: b.currency || 'ج.م',
           isPublic: true,
         };
         await saveDatabase(db);
         return db.storeSettings;
       });
+      auditLog('store_settings_updated', req, { storeName: storeSettings.storeName });
       res.json({ storeSettings });
     })
   );
@@ -752,17 +1038,27 @@ export function createApiApp(): express.Express {
       const clientKey = getClientKey(req);
       const limit = checkLoginRateLimit(clientKey);
       if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSeconds));
         res.status(429).json({
           error: `تم إيقاف المحاولات مؤقتاً لحماية النظام. حاول بعد ${limit.retryAfterSeconds} ثانية.`,
         });
         return;
       }
 
-      const password = typeof req.body?.password === 'string' ? req.body.password : '';
-      const valid = await verifyAdminPassword(password);
+      const parsed = passwordOnlySchema.safeParse(req.body);
+      if (!parsed.success) {
+        recordFailedLogin(clientKey);
+        await delayFailedAuth();
+        res.status(401).json({ error: 'بيانات الدخول غير صحيحة.' });
+        return;
+      }
+
+      const valid = await verifyAdminPassword(parsed.data.password);
       if (!valid) {
         recordFailedLogin(clientKey);
-        res.status(401).json({ error: 'كلمة السر غير صحيحة؛ لم يتم مسح أي بيانات.' });
+        auditLog('reset_test_data_failed', req);
+        await delayFailedAuth();
+        res.status(401).json({ error: 'بيانات الدخول غير صحيحة.' });
         return;
       }
 
@@ -775,13 +1071,33 @@ export function createApiApp(): express.Express {
         db.monthlyClosings = [];
         await saveDatabase(db);
       });
+      auditLog('test_data_reset', req);
       res.json({ ok: true });
     })
   );
 
   // Global error handler — never expose internal stack traces or filesystem paths
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('API Error:', err instanceof Error ? err.message : 'Unknown error');
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const maybeErr = err as { type?: string; status?: number; message?: string } | null;
+    if (maybeErr?.type === 'entity.too.large' || maybeErr?.status === 413) {
+      if (!res.headersSent) {
+        res.status(413).json({
+          error: 'حجم الطلب أو الصورة كبير جداً. الحد الأقصى المسموح به هو 1 ميجابايت.',
+        });
+      }
+      return;
+    }
+    if (maybeErr?.type === 'entity.parse.failed' || maybeErr?.status === 400) {
+      if (!res.headersSent) {
+        res.status(400).json({ error: 'تنسيق البيانات المرسلة غير صالح.' });
+      }
+      return;
+    }
+    console.error('API Error:', {
+      ts: new Date().toISOString(),
+      path: req.path,
+      message: err instanceof Error ? err.message : 'Unknown error',
+    });
     if (res.headersSent) return;
     res.status(500).json({
       error: 'حدث خطأ أثناء حفظ أو قراءة البيانات. يرجى المحاولة مرة أخرى.',

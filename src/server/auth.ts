@@ -1,33 +1,92 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { loadDatabase, type AdminCredentialRecord } from './store.ts';
+import {
+  loadDatabase,
+  saveDatabase,
+  withDbLock,
+  type AdminCredentialRecord,
+} from './store.ts';
 
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+// 4-hour JWT lifetime (short-lived session window)
+const TOKEN_TTL_SECONDS = 4 * 60 * 60;
+const FAILED_AUTH_DELAY_MS = 500;
 
-async function getSessionSecret(): Promise<string> {
-  const fromEnv = process.env.SESSION_SECRET?.trim();
-  if (fromEnv && fromEnv.length >= 16) return fromEnv;
-  const db = await loadDatabase();
-  return db.sessionSecret;
-}
-
-// Bounded in-memory sliding window rate limiter for sensitive auth actions
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-const MAX_LOGIN_ATTEMPTS = 8;
-const WINDOW_MS = 5 * 60 * 1000;
+// Login rate limit: 5 failed attempts per 15 minutes per IP
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_RATE_LIMIT_ENTRIES = 2000;
 
-function pruneRateLimitMap(now: number): void {
-  if (loginAttempts.size < MAX_RATE_LIMIT_ENTRIES) return;
-  for (const [key, entry] of loginAttempts.entries()) {
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const loginAttempts = new Map<string, RateLimitEntry>();
+const generalApiHits = new Map<string, RateLimitEntry>();
+const adminWriteHits = new Map<string, RateLimitEntry>();
+const uploadHits = new Map<string, RateLimitEntry>();
+
+function pruneMap(map: Map<string, RateLimitEntry>, now: number): void {
+  if (map.size < MAX_RATE_LIMIT_ENTRIES) return;
+  for (const [key, entry] of map.entries()) {
     if (now > entry.resetAt) {
-      loginAttempts.delete(key);
+      map.delete(key);
     }
   }
-  if (loginAttempts.size >= MAX_RATE_LIMIT_ENTRIES) {
-    const oldestKey = loginAttempts.keys().next().value;
-    if (oldestKey) loginAttempts.delete(oldestKey);
+  if (map.size >= MAX_RATE_LIMIT_ENTRIES) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey) map.delete(oldestKey);
   }
+}
+
+function consumeRateLimit(
+  map: Map<string, RateLimitEntry>,
+  clientKey: string,
+  maxRequests: number,
+  windowMs: number
+): { allowed: boolean; retryAfterSeconds: number } {
+  const now = Date.now();
+  pruneMap(map, now);
+  const entry = map.get(clientKey);
+  if (!entry || now > entry.resetAt) {
+    map.set(clientKey, { count: 1, resetAt: now + windowMs });
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+  if (entry.count >= maxRequests) {
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+    };
+  }
+  entry.count += 1;
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+export function createRateLimitMiddleware(
+  bucket: 'general' | 'write' | 'upload',
+  maxRequests: number,
+  windowMs: number,
+  errorMessage: string
+) {
+  const map =
+    bucket === 'general'
+      ? generalApiHits
+      : bucket === 'write'
+      ? adminWriteHits
+      : uploadHits;
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const clientKey = getClientKey(req);
+    const result = consumeRateLimit(map, clientKey, maxRequests, windowMs);
+    if (!result.allowed) {
+      res.setHeader('Retry-After', String(result.retryAfterSeconds));
+      res.status(429).json({
+        error: `${errorMessage} حاول مجدداً بعد ${result.retryAfterSeconds} ثانية.`,
+      });
+      return;
+    }
+    next();
+  };
 }
 
 export function getClientKey(req: Request): string {
@@ -42,6 +101,35 @@ export function getClientKey(req: Request): string {
     ? forwarded.split(',')[0]
     : req.ip;
   return (first || 'unknown').trim().slice(0, 64);
+}
+
+/**
+ * Structured security audit logger (records timestamp, event, IP, and safe metadata;
+ * never logs passwords, hashes, or session tokens).
+ */
+export function auditLog(
+  event: string,
+  req: Request,
+  details?: Record<string, string | number | boolean | null | undefined>
+): void {
+  const entry = {
+    ts: new Date().toISOString(),
+    audit: event,
+    ip: getClientKey(req),
+    ...(details ?? {}),
+  };
+  console.info(JSON.stringify(entry));
+}
+
+export async function delayFailedAuth(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, FAILED_AUTH_DELAY_MS));
+}
+
+async function getSessionSecret(): Promise<string> {
+  const fromEnv = process.env.SESSION_SECRET?.trim();
+  if (fromEnv && fromEnv.length >= 16) return fromEnv;
+  const db = await loadDatabase();
+  return db.sessionSecret;
 }
 
 export function getEnvAdminPassword(): string {
@@ -62,7 +150,6 @@ function timingSafeCompareStrings(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
   if (bufA.length !== bufB.length) {
-    // Compare equal-length dummy buffer to keep timing uniform
     crypto.timingSafeEqual(bufA, Buffer.alloc(bufA.length));
     return false;
   }
@@ -82,7 +169,6 @@ export function verifyAgainstRecord(
 export async function verifyAdminPassword(password: string): Promise<boolean> {
   const envPass = getEnvAdminPassword();
   if (envPass) {
-    // Configured process.env passcode always overrides any claimed fallback hash
     return timingSafeCompareStrings(password, envPass);
   }
   const db = await loadDatabase();
@@ -110,10 +196,10 @@ export function checkLoginRateLimit(clientKey: string): {
 
 export function recordFailedLogin(clientKey: string): void {
   const now = Date.now();
-  pruneRateLimitMap(now);
+  pruneMap(loginAttempts, now);
   const entry = loginAttempts.get(clientKey);
   if (!entry || now > entry.resetAt) {
-    loginAttempts.set(clientKey, { count: 1, resetAt: now + WINDOW_MS });
+    loginAttempts.set(clientKey, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
   } else {
     entry.count += 1;
   }
@@ -123,24 +209,44 @@ export function clearFailedLogins(clientKey: string): void {
   loginAttempts.delete(clientKey);
 }
 
-function signPayload(payloadB64: string, secret: string): string {
+interface JwtHeader {
+  alg: 'HS256';
+  typ: 'JWT';
+}
+
+interface JwtPayload {
+  sub: 'admin';
+  role: 'admin';
+  v: string;
+  iat: number;
+  exp: number;
+  jti: string;
+}
+
+function signJwtInput(signingInput: string, secret: string): string {
   return crypto
     .createHmac('sha256', secret)
-    .update(payloadB64)
+    .update(signingInput)
     .digest('base64url');
 }
 
 export async function createSessionToken(credentialVersion: string): Promise<string> {
   const secret = await getSessionSecret();
-  const payload = {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const header: JwtHeader = { alg: 'HS256', typ: 'JWT' };
+  const payload: JwtPayload = {
+    sub: 'admin',
     role: 'admin',
     v: credentialVersion,
-    exp: Date.now() + TOKEN_TTL_MS,
-    jti: crypto.randomBytes(8).toString('hex'),
+    iat: nowSec,
+    exp: nowSec + TOKEN_TTL_SECONDS,
+    jti: crypto.randomBytes(12).toString('hex'),
   };
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const sig = signPayload(encoded, secret);
-  return `${encoded}.${sig}`;
+  const headerB64 = Buffer.from(JSON.stringify(header), 'utf8').toString('base64url');
+  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signingInput = `${headerB64}.${payloadB64}`;
+  const sig = signJwtInput(signingInput, secret);
+  return `${signingInput}.${sig}`;
 }
 
 export async function getCurrentCredentialVersion(): Promise<string> {
@@ -159,33 +265,71 @@ export async function getCurrentCredentialVersion(): Promise<string> {
   return 'unclaimed';
 }
 
-export async function verifySessionToken(token: string | undefined): Promise<boolean> {
-  if (!token || typeof token !== 'string') return false;
+async function decodeAndVerifyJwt(token: string | undefined): Promise<JwtPayload | null> {
+  if (!token || typeof token !== 'string' || token.length > 2048) return null;
   const parts = token.split('.');
-  if (parts.length !== 2) return false;
-  const [encoded, providedSig] = parts;
-  if (!encoded || !providedSig) return false;
+  if (parts.length !== 3) return null;
+  const [headerB64, payloadB64, providedSig] = parts;
+  if (!headerB64 || !payloadB64 || !providedSig) return null;
 
   const secret = await getSessionSecret();
-  const expectedSig = signPayload(encoded, secret);
-  if (!timingSafeCompareStrings(providedSig, expectedSig)) return false;
+  const expectedSig = signJwtInput(`${headerB64}.${payloadB64}`, secret);
+  if (!timingSafeCompareStrings(providedSig, expectedSig)) return null;
 
   try {
-    const decoded = JSON.parse(
-      Buffer.from(encoded, 'base64url').toString('utf8')
-    ) as { role?: string; v?: string; exp?: number };
+    const header = JSON.parse(
+      Buffer.from(headerB64, 'base64url').toString('utf8')
+    ) as Partial<JwtHeader>;
+    if (header.alg !== 'HS256' || header.typ !== 'JWT') return null;
 
-    if (decoded.role !== 'admin') return false;
-    if (!decoded.exp || Date.now() > decoded.exp) return false;
+    const decoded = JSON.parse(
+      Buffer.from(payloadB64, 'base64url').toString('utf8')
+    ) as Partial<JwtPayload>;
+
+    if (decoded.sub !== 'admin' || decoded.role !== 'admin') return null;
+    if (typeof decoded.jti !== 'string' || decoded.jti.length < 8) return null;
+    if (typeof decoded.exp !== 'number' || typeof decoded.iat !== 'number') return null;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec >= decoded.exp || decoded.iat > nowSec + 60) return null;
 
     const currentVersion = await getCurrentCredentialVersion();
     if (currentVersion === 'unclaimed' || decoded.v !== currentVersion) {
-      return false;
+      return null;
     }
-    return true;
+
+    const db = await loadDatabase();
+    if (db.revokedTokens.some((r) => r.jti === decoded.jti)) {
+      return null;
+    }
+
+    return decoded as JwtPayload;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function verifySessionToken(token: string | undefined): Promise<boolean> {
+  const payload = await decodeAndVerifyJwt(token);
+  return payload !== null;
+}
+
+export async function revokeSessionToken(token: string | undefined): Promise<boolean> {
+  const payload = await decodeAndVerifyJwt(token);
+  if (!payload) return false;
+
+  const expMs = payload.exp * 1000;
+  await withDbLock(async () => {
+    const db = await loadDatabase();
+    const now = Date.now();
+    db.revokedTokens = db.revokedTokens.filter((r) => r.exp > now && r.jti !== payload.jti);
+    db.revokedTokens.push({ jti: payload.jti, exp: expMs });
+    if (db.revokedTokens.length > 200) {
+      db.revokedTokens = db.revokedTokens.slice(-200);
+    }
+    await saveDatabase(db);
+  });
+  return true;
 }
 
 export function extractBearerToken(req: Request): string | undefined {
@@ -203,7 +347,7 @@ export async function requireAdmin(
     const token = extractBearerToken(req);
     const valid = await verifySessionToken(token);
     if (!valid) {
-      res.status(401).json({ error: 'غير مصرح — يرجى إدخال كلمة سر الإدارة.' });
+      res.status(401).json({ error: 'غير مصرح — يرجى تسجيل الدخول للوحة الإدارة.' });
       return;
     }
     next();

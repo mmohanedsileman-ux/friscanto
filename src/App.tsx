@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { DEFAULT_MENU_ITEMS, DEFAULT_STORE_SETTINGS } from './data/defaultMenu';
-import { fetchPublicBootstrap } from './lib/api';
+import { fetchPublicBootstrap, logoutAdmin } from './lib/api';
 import type { MenuItem, StoreSettings } from './types';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { CustomerMenuView } from './components/CustomerMenuView';
@@ -117,6 +117,28 @@ function FirstcantoApp() {
     };
   }, [loadPublicData]);
 
+  // Prevent search engine indexing whenever admin view is active
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let meta = document.querySelector<HTMLMetaElement>('meta[name="robots"]');
+    if (viewMode === 'admin') {
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'robots';
+        document.head.appendChild(meta);
+      }
+      meta.content = 'noindex, nofollow';
+    } else if (meta) {
+      meta.remove();
+    }
+    return () => {
+      const existing = document.querySelector<HTMLMetaElement>('meta[name="robots"]');
+      if (existing && viewMode === 'admin') {
+        existing.remove();
+      }
+    };
+  }, [viewMode]);
+
   const navigateTo = (mode: 'customer' | 'admin') => {
     setViewMode(mode);
     if (typeof window !== 'undefined') {
@@ -127,7 +149,14 @@ function FirstcantoApp() {
   };
 
   const handleLogout = useCallback(() => {
-    setAuthToken(null);
+    setAuthToken((currentToken) => {
+      if (currentToken) {
+        void logoutAdmin(currentToken).catch(() => {
+          // Ignore network errors — local session is cleared immediately
+        });
+      }
+      return null;
+    });
   }, []);
 
   const customerItems: MenuItem[] = loadedFromServer ? publicMenuItems : DEFAULT_MENU_ITEMS;

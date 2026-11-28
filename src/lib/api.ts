@@ -94,6 +94,13 @@ export function loginAdmin(password: string): Promise<AuthTokenResponse> {
   });
 }
 
+export function logoutAdmin(token: string): Promise<{ ok: boolean }> {
+  return apiRequest<{ ok: boolean }>('/api/auth/logout', {
+    method: 'POST',
+    token,
+  });
+}
+
 export function changeAdminPassword(
   token: string,
   currentPassword: string,
@@ -270,6 +277,17 @@ export function deleteMenuItem(token: string, itemId: string): Promise<{ ok: boo
   return apiRequest<{ ok: boolean }>(`/api/admin/menu/${encodeURIComponent(itemId)}`, {
     method: 'DELETE',
     token,
+  });
+}
+
+export function uploadMenuImage(
+  token: string,
+  dataUrl: string
+): Promise<{ imageUrl: string }> {
+  return apiRequest<{ imageUrl: string }>('/api/admin/uploads', {
+    method: 'POST',
+    token,
+    body: { dataUrl },
   });
 }
 

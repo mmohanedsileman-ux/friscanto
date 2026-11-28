@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Plus,
   Minus,
@@ -43,6 +44,8 @@ interface PosViewProps {
   onUnauthorized: () => void;
 }
 
+export const RECEIPT_COPIES = 2;
+
 interface CartLine {
   item: MenuItem;
   quantity: number;
@@ -69,7 +72,64 @@ export function PosView({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
+  const isPrintingRef = useRef(false);
+  const printCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (receiptOrder) {
+      document.documentElement.classList.add('receipt-print-active');
+      document.body.classList.add('receipt-print-active');
+    } else {
+      document.documentElement.classList.remove('receipt-print-active');
+      document.body.classList.remove('receipt-print-active');
+    }
+    return () => {
+      document.documentElement.classList.remove('receipt-print-active');
+      document.body.classList.remove('receipt-print-active');
+    };
+  }, [receiptOrder]);
+
+  useEffect(() => {
+    return () => {
+      printCleanupRef.current?.();
+      printCleanupRef.current = null;
+      isPrintingRef.current = false;
+    };
+  }, []);
+
+  const handlePrintReceipt = () => {
+    if (!receiptOrder || isPrintingRef.current) return;
+    isPrintingRef.current = true;
+    setIsPrinting(true);
+    document.documentElement.classList.add('receipt-print-active');
+    document.body.classList.add('receipt-print-active');
+
+    let done = false;
+    let fallbackTimer: number | null = null;
+
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      isPrintingRef.current = false;
+      setIsPrinting(false);
+      window.removeEventListener('afterprint', cleanup);
+      if (fallbackTimer !== null) {
+        window.clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      printCleanupRef.current = null;
+    };
+
+    printCleanupRef.current = cleanup;
+    window.addEventListener('afterprint', cleanup, { once: true });
+    // Safety fallback for mobile browsers that do not reliably fire afterprint
+    fallbackTimer = window.setTimeout(cleanup, 4000);
+
+    window.print();
+  };
 
   const todayKey = getLocalDateKey();
 
@@ -799,88 +859,27 @@ export function PosView({
         </div>
       )}
 
-      {/* Printable Order Receipt Modal */}
+      {/* Printable Order Receipt Modal (Screen Preview Only — Print Uses Portal Below) */}
       {receiptOrder && (
         <div
-          className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4 no-print"
           onClick={() => setReceiptOrder(null)}
         >
           <div
-            className="bg-white rounded-2xl border border-[#E5E3DC] max-w-md w-full p-6 print-only-container"
+            className="bg-white rounded-2xl border border-[#E5E3DC] max-w-md w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-center pb-4 border-b border-dashed border-[#D6D3C9]">
-              <h3 className="font-display text-xl font-extrabold text-[#14532D]">
-                {settings.storeName || 'فريستكانتو'}
-              </h3>
-              <p className="text-xs text-[#676D62] mt-0.5">طازة · فريش · منعش</p>
-              <p className="font-mono-num text-sm font-bold text-[#171916] mt-2">
-                إيصال رقم: {receiptOrder.orderNumber}
-              </p>
-              <p className="text-xs text-[#676D62] mt-0.5">
-                {receiptOrder.dateKey} · {ORDER_TYPE_LABELS[receiptOrder.orderType]} ·{' '}
-                {PAYMENT_METHOD_LABELS[receiptOrder.paymentMethod]}
-              </p>
-            </div>
-
-            <div className="py-4 space-y-2.5 border-b border-dashed border-[#D6D3C9]">
-              {receiptOrder.items.map((item, i) => (
-                <div key={i} className="flex items-center justify-between gap-2 text-sm">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-8 h-8 rounded-md overflow-hidden bg-[#F3F2EC] shrink-0 no-print">
-                      <SafeImage
-                        src={resolveItemImage(
-                          item.itemId,
-                          item.name,
-                          item.category,
-                          itemImageLookup.get(item.itemId)
-                        )}
-                        alt={item.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <span className="truncate font-medium text-[#171916]">
-                      {item.name} × {item.quantity}
-                    </span>
-                  </div>
-                  <span className="font-mono-num font-bold text-[#171916] shrink-0">
-                    {formatCurrency(item.lineTotal, settings.currency)}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className="py-4 space-y-1.5 text-sm">
-              <div className="flex justify-between text-[#52584D]">
-                <span>المجموع الفرعي</span>
-                <span className="font-mono-num">
-                  {formatCurrency(receiptOrder.subtotal, settings.currency)}
-                </span>
-              </div>
-              {receiptOrder.discount > 0 && (
-                <div className="flex justify-between text-amber-800">
-                  <span>خصم</span>
-                  <span className="font-mono-num">
-                    -{formatCurrency(receiptOrder.discount, settings.currency)}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between pt-2 border-t border-[#EFECE4] font-display text-base font-extrabold text-[#14532D]">
-                <span>الإجمالي المدفوع</span>
-                <span className="font-mono-num">
-                  {formatCurrency(receiptOrder.total, settings.currency)}
-                </span>
-              </div>
-            </div>
+            {renderReceiptContent(receiptOrder, true)}
 
             <div className="mt-4 flex items-center gap-3 no-print">
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-[#15803D] text-white text-sm font-bold hover:bg-[#166534] inline-flex items-center justify-center gap-2 cursor-pointer"
+                disabled={isPrinting}
+                onClick={handlePrintReceipt}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-[#15803D] text-white text-sm font-bold hover:bg-[#166534] disabled:opacity-60 inline-flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>طباعة الإيصال</span>
+                <span>{isPrinting ? 'جاري فتح الطباعة...' : 'طباعة الإيصال'}</span>
               </button>
               <button
                 type="button"
@@ -893,6 +892,100 @@ export function PosView({
           </div>
         </div>
       )}
+
+      {/* Dedicated Print-Only Receipt Portal (Exactly RECEIPT_COPIES Copies, Isolated from Page UI) */}
+      {receiptOrder &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="receipt-print-sheet" dir="rtl" aria-hidden="true">
+            <style>{'@media print { @page { size: 80mm auto; margin: 0; } }'}</style>
+            {Array.from({ length: RECEIPT_COPIES }, (_, copyIndex) => (
+              <div
+                key={copyIndex}
+                className={
+                  copyIndex < RECEIPT_COPIES - 1
+                    ? 'receipt-copy receipt-copy-break'
+                    : 'receipt-copy receipt-copy-last'
+                }
+              >
+                {renderReceiptContent(receiptOrder, false)}
+              </div>
+            ))}
+          </div>,
+          document.body
+        )}
     </div>
   );
+
+  function renderReceiptContent(order: Order, includeThumbnails: boolean) {
+    return (
+      <>
+        <div className="text-center pb-4 border-b border-dashed border-[#D6D3C9]">
+          <h3 className="font-display text-xl font-extrabold text-[#14532D]">
+            {settings.storeName || 'فريستكانتو'}
+          </h3>
+          <p className="text-xs text-[#676D62] mt-0.5">طازة · فريش · منعش</p>
+          <p className="font-mono-num text-sm font-bold text-[#171916] mt-2">
+            إيصال رقم: {order.orderNumber}
+          </p>
+          <p className="text-xs text-[#676D62] mt-0.5">
+            {order.dateKey} · {ORDER_TYPE_LABELS[order.orderType]} ·{' '}
+            {PAYMENT_METHOD_LABELS[order.paymentMethod]}
+          </p>
+        </div>
+
+        <div className="py-4 space-y-2.5 border-b border-dashed border-[#D6D3C9]">
+          {order.items.map((item, i) => (
+            <div key={i} className="flex items-center justify-between gap-2 text-sm">
+              <div className="flex items-center gap-2 min-w-0">
+                {includeThumbnails && (
+                  <div className="w-8 h-8 rounded-md overflow-hidden bg-[#F3F2EC] shrink-0 no-print">
+                    <SafeImage
+                      src={resolveItemImage(
+                        item.itemId,
+                        item.name,
+                        item.category,
+                        itemImageLookup.get(item.itemId)
+                      )}
+                      alt={item.name}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+                <span className="truncate font-medium text-[#171916]">
+                  {item.name} × {item.quantity}
+                </span>
+              </div>
+              <span className="font-mono-num font-bold text-[#171916] shrink-0">
+                {formatCurrency(item.lineTotal, settings.currency)}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="py-4 space-y-1.5 text-sm">
+          <div className="flex justify-between text-[#52584D]">
+            <span>المجموع الفرعي</span>
+            <span className="font-mono-num">
+              {formatCurrency(order.subtotal, settings.currency)}
+            </span>
+          </div>
+          {order.discount > 0 && (
+            <div className="flex justify-between text-amber-800">
+              <span>خصم</span>
+              <span className="font-mono-num">
+                -{formatCurrency(order.discount, settings.currency)}
+              </span>
+            </div>
+          )}
+          <div className="flex justify-between pt-2 border-t border-[#EFECE4] font-display text-base font-extrabold text-[#14532D]">
+            <span>الإجمالي المدفوع</span>
+            <span className="font-mono-num">
+              {formatCurrency(order.total, settings.currency)}
+            </span>
+          </div>
+        </div>
+      </>
+    );
+  }
 }

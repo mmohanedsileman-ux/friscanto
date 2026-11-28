@@ -9,13 +9,16 @@ interface SafeImageProps {
   eager?: boolean;
 }
 
+const SAFE_DATA_IMAGE_RE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+
 function isSafeImageSrc(src: string): boolean {
   const trimmed = src.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('/')) return !trimmed.startsWith('//');
+  if (SAFE_DATA_IMAGE_RE.test(trimmed)) return true;
   try {
     const parsed = new URL(trimmed);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    return parsed.protocol === 'https:';
   } catch {
     return false;
   }
@@ -28,7 +31,8 @@ export function SafeImage({
   fallbackLabel,
   eager = false,
 }: SafeImageProps) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = failedSrc === src;
 
   if (!isSafeImageSrc(src) || failed) {
     return (
@@ -50,7 +54,7 @@ export function SafeImage({
       src={src}
       alt={alt}
       referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
+      onError={() => setFailedSrc(src)}
       className={className}
       loading={eager ? 'eager' : 'lazy'}
       decoding="async"

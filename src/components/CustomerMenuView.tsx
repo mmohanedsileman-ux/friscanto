@@ -363,13 +363,13 @@ export function CustomerMenuView({
               </div>
             </div>
 
-            {/* Hero Showcase Photography */}
-            <div className="lg:col-span-7 overflow-hidden rounded-2xl border border-[#E7E5DE] bg-[#EAE8E0] min-h-[240px] lg:min-h-[340px]">
+            {/* Hero Showcase Banner */}
+            <div className="lg:col-span-7 overflow-hidden rounded-2xl border border-[#DFE6D8] bg-[#005B1F] aspect-[16/10] sm:aspect-[16/9] lg:aspect-auto lg:min-h-[340px] flex items-center justify-center">
               <SafeImage
                 src={FRESCANTO_IMAGES.hero}
-                alt="تشكيلة فريستكانتو للفواكه الفريش والعصائر الطبيعية"
+                alt="بنر فريستكانتو للفواكه الفريش والعصائر الطبيعية"
                 fallbackLabel="فريستكانتو فواكه فريش"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover object-center"
                 eager
               />
             </div>

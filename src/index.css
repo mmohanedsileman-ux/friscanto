@@ -41,6 +41,11 @@
   }
 }
 
+/* Hidden on screen; revealed strictly during receipt printing */
+.receipt-print-sheet {
+  display: none;
+}
+
 @media print {
   .no-print {
     display: none !important;
@@ -55,5 +60,46 @@
     padding: 0 !important;
     margin: 0 !important;
     max-width: 100% !important;
+  }
+
+  /* Isolated thermal receipt mode: hide entire app root & UI, show ONLY the receipt copies */
+  html.receipt-print-active,
+  body.receipt-print-active {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 80mm !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  body.receipt-print-active > *:not(.receipt-print-sheet) {
+    display: none !important;
+  }
+  body.receipt-print-active > .receipt-print-sheet {
+    display: block !important;
+    width: 80mm !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .receipt-copy {
+    width: 100% !important;
+    padding: 4mm 3mm !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .receipt-copy-break {
+    page-break-after: always;
+    break-after: page;
+  }
+  .receipt-copy-last {
+    page-break-after: auto;
+    break-after: auto;
   }
 }
